@@ -300,23 +300,22 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     }
   })
 
-  // YTD from Bank_Summary (Cols: Year|Month|Account ID|Owner|Function|Type|Category|Amount)
-  const SUM = { YEAR: 0, ACCT: 2, OWNER: 3, TYPE: 5, CAT: 6, AMT: 7 }
+  // YTD from Bank_Tx directly — filter by transaction date in current year
+  // More reliable than Bank_Summary which may be empty or have header rows
   const currentYear = new Date().getFullYear()
   const ytdData = {}
   OWNERS.filter(o => o !== 'All Owners').forEach(owner => {
-    const rows = bankSummaryRows.slice(1).filter(r =>
-      r[SUM.YEAR] && !isNaN(Number(r[SUM.YEAR])) && Number(r[SUM.YEAR]) === currentYear &&
-      String(r[SUM.OWNER] || '').trim() === owner &&
-      String(r[SUM.TYPE] || '') === 'Expense'
-    )
     const catMap = {}
-    rows.forEach(r => {
-      const cat = String(r[SUM.CAT] || '')
-      const acct = String(r[SUM.ACCT] || '')
-      if (owner === 'Bryan' && acct === 'A005' && cat === 'Savings') return
-      if (owner === 'Bryan' && acct === 'A006' && cat === 'Transfer') return
-      catMap[cat] = (catMap[cat] || 0) + Math.abs(toNum(r[SUM.AMT]) ?? 0)
+    allTx.filter(t => {
+      if (t.owner !== owner) return false
+      if (!t.date || t.date.getFullYear() !== currentYear) return false
+      if (t.type !== 'Expense') return false
+      // Exclude Bryan's internal transfers between his own accounts
+      if (owner === 'Bryan' && t.acct === 'A005' && t.cat === 'Savings') return false
+      if (owner === 'Bryan' && t.acct === 'A006' && t.cat === 'Transfer') return false
+      return true
+    }).forEach(t => {
+      catMap[t.cat] = (catMap[t.cat] || 0) + Math.abs(t.amt)
     })
     ytdData[owner] = Object.entries(catMap).map(([n,v])=>({n,v})).sort((a,b)=>b.v-a.v)
   })
@@ -596,10 +595,10 @@ function getMockBankData() {
     },
     ytdData: {
       Bryan: [
-        { n: 'House', v: 9750 }, { n: 'Tax', v: 2872.57 }, { n: 'Insurance', v: 208.30 },
+        { n: 'House', v: 9750 }, { n: 'Tax', v: 2872.57 }, { n: 'Insurance', v: 253.25 },
         { n: 'Holiday', v: 1500 }, { n: 'Investment', v: 1000 }, { n: 'Parents', v: 300 },
-        { n: 'Subscription', v: 87.72 }, { n: 'Food', v: 127.04 }, { n: 'Phone', v: 18 },
-        { n: 'Transport', v: 4.04 }, { n: 'Miscellaneous', v: 10 }, { n: 'Car', v: 1.14 },
+        { n: 'Subscription', v: 87.72 }, { n: 'Food', v: 198 }, { n: 'Phone', v: 18 },
+        { n: 'Transport', v: 12 }, { n: 'Miscellaneous', v: 30 }, { n: 'Car', v: 1.14 },
       ],
       Joint: [
         { n: 'Mortgage', v: 9234 }, { n: 'Kids', v: 3600 }, { n: 'Loan', v: 2000 },
@@ -1496,7 +1495,7 @@ function BankingPage({ data, reload }) {
               ? <SpendSection cats={ytd} />
               : <div style={{ fontSize: 11, color: C.muted }}>No YTD data yet</div>
             }
-            <Tag>Bank_Summary</Tag>
+            <Tag>Bank_Tx</Tag>
           </div>
         </>
       )}
