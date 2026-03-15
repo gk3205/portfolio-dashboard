@@ -120,6 +120,13 @@ const toNum = v => {
 const parseDate = v => {
   if (!v) return null
   if (v instanceof Date) return v
+  // Handle Excel/Google Sheets serial date numbers (e.g. 45293 = 2023-12-31)
+  // Google Sheets API with UNFORMATTED_VALUE returns dates as serial numbers
+  const n = Number(v)
+  if (!isNaN(n) && n > 40000 && n < 70000) {
+    // Excel epoch starts 1899-12-30, JS epoch starts 1970-01-01
+    return new Date(Math.round((n - 25569) * 86400 * 1000))
+  }
   const d = new Date(String(v).replace(' ', 'T'))
   return isNaN(d.getTime()) ? null : d
 }
@@ -1549,21 +1556,18 @@ function HolidayPage({ data, reload }) {
         <div style={S.cardTitle}>Annual holiday spend by year</div>
         <div style={S.cardSub}>Grouped by Holiday Year · highest spend trip at bottom · click any bar for breakdown</div>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={chartData} margin={{ top: 24, right: 8, bottom: 0, left: -10 }}
+          <ComposedChart data={chartData} margin={{ top: 28, right: 8, bottom: 0, left: -10 }}
             onClick={e => { if (e?.activeLabel) setDrillYear(parseInt(e.activeLabel)) }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
             <XAxis dataKey="year" tick={{ fontSize: 11, fill: '#555' }} tickLine={false} axisLine={false} />
             <YAxis tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} tickFormatter={fmtK} />
-            {/* Stacked bars — one per trip in sort order (highest total = first = bottom) */}
-            {tripSortOrder.map(trip => (
-              <Bar key={trip} dataKey={trip} stackId="a" fill={tripColor(trip)} radius={0} />
+            {tripSortOrder.map((trip, idx) => (
+              <Bar key={trip} dataKey={trip} stackId="a" fill={tripColor(trip)} radius={0}
+                label={idx === tripSortOrder.length - 1 ? <TotalLabel /> : false} />
             ))}
-            {/* Invisible bar carrying the total label */}
-            <Bar dataKey="_total" stackId="b" fill="transparent" label={<TotalLabel />} />
-            {/* Deposit line */}
             <Line type="monotone" dataKey="_deposits" stroke="#374151" strokeWidth={2}
               strokeDasharray="5 4" dot={{ r: 4, fill: '#374151' }} />
-          </BarChart>
+          </ComposedChart>
         </ResponsiveContainer>
         <div style={{ ...S.legend, marginTop: 8 }}>
           <LegendLine color="#374151" label="Deposits" dashed />
@@ -1698,7 +1702,7 @@ function HousePage({ data, reload }) {
         <div style={S.cardTitle}>Annual house fund spend by category</div>
         <div style={S.cardSub}>All years · categories stacked · click any bar for breakdown · dotted line = amount saved</div>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart
+          <ComposedChart
             data={chartData}
             margin={{ top: 28, right: 8, bottom: 0, left: -10 }}
             onClick={e => { if (e?.activeLabel) setDrillYear(parseInt(e.activeLabel)) }}
@@ -1707,15 +1711,14 @@ function HousePage({ data, reload }) {
             <XAxis dataKey="year" tick={{ fontSize: 11, fill: '#555' }} tickLine={false} axisLine={false} />
             <YAxis tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} tickFormatter={fmtK} />
             {/* Stacked bars — sorted by all-time total, highest first = bottom */}
-            {catSortOrder.map(cat => (
-              <Bar key={cat} dataKey={cat} stackId="a" fill={houseCatColor(cat)} radius={0} />
+            {catSortOrder.map((cat, idx) => (
+              <Bar key={cat} dataKey={cat} stackId="a" fill={houseCatColor(cat)} radius={0}
+                label={idx === catSortOrder.length - 1 ? <TotalLabel /> : false} />
             ))}
-            {/* Invisible bar carrying the total label above the stack */}
-            <Bar dataKey="_total" stackId="b" fill="transparent" label={<TotalLabel />} />
-            {/* Saved dotted line */}
+            {/* Saved dotted line — works correctly inside ComposedChart */}
             <Line type="monotone" dataKey="_saved" stroke="#374151" strokeWidth={2}
               strokeDasharray="5 4" dot={{ r: 4, fill: '#374151' }} />
-          </BarChart>
+          </ComposedChart>
         </ResponsiveContainer>
 
         <div style={{ ...S.legend, marginTop: 8 }}>
