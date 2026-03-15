@@ -2,7 +2,7 @@
 // STEP 1: Paste your Google Sheet ID (from the URL bar)
 // Sheet URL: https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
 // ============================================================
-export const SHEET_ID = 1CA163l7NJy38iDqivzAcFsisT0-Vo-3S6VuiPnYphN4
+export const SHEET_ID = '1CA163l7NJy38iDqivzAcFsisT0-Vo-3S6VuiPnYphN4'
 
 // ============================================================
 // STEP 2: Paste your Google Sheets API Key
@@ -13,7 +13,7 @@ export const SHEET_ID = 1CA163l7NJy38iDqivzAcFsisT0-Vo-3S6VuiPnYphN4
 //   4. Go to Credentials → Create Credentials → API Key
 //   5. (Optional) Restrict key to Google Sheets API + your Vercel domain
 // ============================================================
-export const API_KEY = AIzaSyDzP1jwpX_94Lo0ZhOW41iL7_9EZObx4Ic
+export const API_KEY = 'AIzaSyDzP1jwpX_94Lo0ZhOW41iL7_9EZObx4Ic'
 
 // ============================================================
 // Ranges — these match your actual sheet tab names exactly
