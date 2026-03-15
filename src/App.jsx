@@ -351,8 +351,9 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
       return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(a006Running) }
     })
 
-  // Joint A008: compute from Bank_Tx directly, grouped by calendar month.
-  // All Income and Expense transactions included (no starting-capital exclusion needed for A008).
+  // All other savings accounts (A008 Joint): same pattern as A006.
+  // Flow bars exclude 'Others' category income (one-off starting balance lump).
+  // Running balance line includes ALL transactions for true account value.
   SAVINGS_ACCOUNTS.filter(sa => sa.id !== 'A006').forEach(sa => {
     const acctTx = allTx.filter(t => t.acct === sa.id).sort((a, b) => a.date - b.date)
     const monthMap = {}
@@ -361,14 +362,19 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
       const yr = t.date.getFullYear()
       const mo = t.date.getMonth() + 1
       const key = yr + '-' + String(mo).padStart(2, '0')
-      if (!monthMap[key]) monthMap[key] = { year: yr, month: mo, flow: 0 }
-      monthMap[key].flow += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+      if (!monthMap[key]) monthMap[key] = { year: yr, month: mo, flow: 0, balanceDelta: 0 }
+      const delta = (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+      monthMap[key].balanceDelta += delta
+      // Exclude 'Others' income (starting capital) from flow bar — same logic as A006
+      if (!(t.type === 'Income' && t.cat === 'Others')) {
+        monthMap[key].flow += delta
+      }
     })
     let running = 0
     savingsHistory[sa.id] = Object.values(monthMap)
       .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
       .map(m => {
-        running += m.flow
+        running += m.balanceDelta
         return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(running) }
       })
   })
@@ -614,7 +620,10 @@ function getMockBankData() {
       // Feb flow = +$4750 (deposit only), balance = $17550 (incl $12800 starting capital)
       // Mar flow = -$3600 (outflows), balance = $13950
       A006: [{ label: 'Feb 26', flow: 4750, balance: 17550 }, { label: 'Mar 26', flow: -3600, balance: 13950 }],
-      A008: [{ label: 'Jan 26', flow: 10869, balance: 10869 }, { label: 'Feb 26', flow: 320, balance: 11189 }],
+      // A008: flow excludes starting capital $8969, balance includes all
+      // Feb flow = +$1900 (Transfer deposit only), balance = $10,869
+      // Mar flow = +$320, balance = $11,189
+      A008: [{ label: 'Feb 26', flow: 1900, balance: 10869 }, { label: 'Mar 26', flow: 320, balance: 11189 }],
     },
   }
 }
