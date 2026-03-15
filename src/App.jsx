@@ -248,11 +248,13 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     const startLabel = start.toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })
 
     if (owner === 'Bryan') {
-      // Bryan income = A005 only (salary, interest, others).
-      // Exclude A005 Transfer income (the $1,100 return from savings — already in savings box).
-      // Exclude A006 income entirely (starting balance + transfer in are internal savings movements).
+      // Bryan income = A005 Salary + Interest only.
+      // Exclude Transfer (return from savings — already in savings box).
+      // Exclude Others (used as 'Starting Balance' marker — pre-existing cash, not new income).
+      // Exclude A006 income entirely (internal savings movements).
       const income = periodTx
-        .filter(t => t.acct === 'A005' && t.type === 'Income' && t.cat !== 'Transfer')
+        .filter(t => t.acct === 'A005' && t.type === 'Income'
+          && t.cat !== 'Transfer' && t.cat !== 'Others')
         .reduce((s, t) => s + t.amt, 0)
       const grossToSavings = periodTx
         .filter(t => t.acct === 'A005' && t.type === 'Expense' && t.cat === 'Savings')
@@ -314,10 +316,38 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     ytdData[owner] = Object.entries(catMap).map(([n,v])=>({n,v})).sort((a,b)=>b.v-a.v)
   })
 
-  // Savings MoM from Bank_Balance (Cols: Year|Month|Account ID|Owner|Net Flow)
+  // Savings MoM — A006 (Bryan) computed from Bank_Tx directly to capture true net savings
+  // (Bank_Balance sheet can misalign when deposits and withdrawals fall in different months).
+  // A008 (Joint) uses Bank_Balance as-is.
   const balRows = bankBalanceRows.slice(1).filter(r => r[0] && r[2])
   const savingsHistory = {}
-  SAVINGS_ACCOUNTS.forEach(sa => {
+
+  // Bryan A006: compute from allTx directly — group by calendar month
+  const a006Tx = allTx.filter(t => t.acct === 'A006')
+  const a006MonthMap = {}
+  a006Tx.forEach(t => {
+    if (!t.date) return
+    const key = t.date.getFullYear() + '-' + String(t.date.getMonth() + 1).padStart(2, '0')
+    if (!a006MonthMap[key]) a006MonthMap[key] = { year: t.date.getFullYear(), month: t.date.getMonth() + 1, flow: 0 }
+    a006MonthMap[key].flow += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+  })
+  const a006History = Object.values(a006MonthMap)
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
+    // Exclude the starting balance month (usually a large one-off Income lump)
+    // Detect: first month where Income >> monthly deposit ($1,500) by >5x
+    .filter((m, idx, arr) => {
+      if (idx !== 0) return true // only filter first month potentially
+      const typicalDeposit = 1500
+      return Math.abs(m.flow) < typicalDeposit * 5 // if first month flow is normal, keep it
+    })
+  let a006Running = 0
+  savingsHistory['A006'] = a006History.map(m => {
+    a006Running += m.flow
+    return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(a006Running) }
+  })
+
+  // Joint A008: use Bank_Balance sheet
+  SAVINGS_ACCOUNTS.filter(sa => sa.id !== 'A006').forEach(sa => {
     const rows = balRows.filter(r => String(r[2]) === sa.id)
       .sort((a, b) => {
         const ya = Number(a[0]), yb = Number(b[0]), ma = Number(a[1]), mb = Number(b[1])
@@ -510,7 +540,7 @@ function getMockBankData() {
     accountBalances: { A005: 1207.40, A006: 13950, A007: 3005.76, A008: 11189.21, A009: 619.98, A010: 4524.10 },
     payPeriodData: {
       Bryan: {
-        income: 18236.04, daysIn: dB, startLabel: '24 Feb 2026',
+        income: 17881.05, daysIn: dB, startLabel: '24 Feb 2026', // Salary + Interest only, excludes $355 starting balance
         grossToSavings: 4750,
         // All A006 outflows: Investment to iFAST, Holiday to OCBC, Tax transfer back to A005
         savingsReturns: [
@@ -568,7 +598,8 @@ function getMockBankData() {
       Natalie: [{ n: 'CCA', v: 830 }, { n: 'Tuition', v: 791.30 }, { n: 'Investment', v: 200 }],
     },
     savingsHistory: {
-      A006: [{ label: 'Jan 26', flow: 17550, balance: 17550 }, { label: 'Feb 26', flow: -3600, balance: 13950 }],
+      // A006 computed from Bank_Tx: Jan deposit $1500, Feb net = $4750-$1000-$1500-$1100 = $1150
+      A006: [{ label: 'Jan 26', flow: 1500, balance: 1500 }, { label: 'Feb 26', flow: 1150, balance: 2650 }],
       A008: [{ label: 'Jan 26', flow: 10869, balance: 10869 }, { label: 'Feb 26', flow: 320, balance: 11189 }],
     },
   }
