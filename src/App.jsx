@@ -289,7 +289,7 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
   const ytdData = {}
   OWNERS.filter(o => o !== 'All Owners').forEach(owner => {
     const rows = bankSummaryRows.slice(1).filter(r =>
-      r[SUM.YEAR] && Number(r[SUM.YEAR]) === currentYear &&
+      r[SUM.YEAR] && !isNaN(Number(r[SUM.YEAR])) && Number(r[SUM.YEAR]) === currentYear &&
       String(r[SUM.OWNER] || '').trim() === owner &&
       String(r[SUM.TYPE] || '') === 'Expense'
     )
@@ -1233,6 +1233,7 @@ function PayPeriodSummary({ period }) {
   // A006 spend is already tracked via the net savings figure.
   const bankOutflow = (bankCats || []).reduce((s, c) => s + c.v, 0)
   const savOutflow  = (savCats  || []).reduce((s, c) => s + c.v, 0)
+  const totalOutflow = bankOutflow + savOutflow
   const returnsTotal = savingsReturns?.reduce((s, r) => s + r.amt, 0) || 0
   const remaining = income - (grossToSavings || 0) + returnsTotal - bankOutflow
   // Budget used % based on bank outflows + net savings vs income
@@ -1346,8 +1347,8 @@ function BankingPage({ data, reload }) {
   const showSavings = isAll || owner === 'Bryan' || owner === 'Joint'
 
   // Combined all-cats max for Bryan (so bank+savings bars share same scale)
-  const bryanAllMax = isBryan && period
-    ? Math.max(...[...( period.bankCats || []), ...(period.savCats || [])].map(c => c.v), 1)
+  const bryanAllMax = isBryan && period && (period.bankCats?.length || period.savCats?.length)
+    ? Math.max(...[...(period.bankCats || []), ...(period.savCats || [])].map(c => c.v), 1)
     : 1
 
   const ownerColor = C.ownerLines[owner] || C.green
