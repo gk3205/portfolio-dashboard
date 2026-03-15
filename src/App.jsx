@@ -265,6 +265,11 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
       const savingsReturns = a006Expenses.map(t => ({ label: t.remarks || t.cat, amt: Math.abs(t.amt) }))
       const totalA006Out = a006Expenses.reduce((s, t) => s + Math.abs(t.amt), 0)
       const netSavings = grossToSavings - totalA006Out
+      // Only Transfer-category A006 expenses physically return to A005 bank account.
+      // Investment and Holiday are true outflows that leave the system entirely.
+      const transfersBackToBank = a006Expenses
+        .filter(t => t.cat === 'Transfer')
+        .reduce((s, t) => s + Math.abs(t.amt), 0)
       const bankCatMap = {}
       periodTx.filter(t => t.acct === 'A005' && t.type === 'Expense' && t.cat !== 'Savings')
         .forEach(t => { bankCatMap[t.cat] = (bankCatMap[t.cat] || 0) + Math.abs(t.amt) })
@@ -272,7 +277,7 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
       periodTx.filter(t => t.acct === 'A006' && t.type === 'Expense' && t.cat !== 'Transfer')
         .forEach(t => { savCatMap[t.cat] = (savCatMap[t.cat] || 0) + Math.abs(t.amt) })
       payPeriodData[owner] = {
-        income, grossToSavings, savingsReturns, netSavings,
+        income, grossToSavings, savingsReturns, netSavings, transfersBackToBank,
         bankCats: Object.entries(bankCatMap).map(([n,v])=>({n,v})).sort((a,b)=>b.v-a.v),
         savCats: Object.entries(savCatMap).map(([n,v])=>({n,v})).sort((a,b)=>b.v-a.v),
         periodStart: start, daysIn, startLabel, triggerLabel: TRIGGER_LABELS[owner],
@@ -322,29 +327,26 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
   const balRows = bankBalanceRows.slice(1).filter(r => r[0] && r[2])
   const savingsHistory = {}
 
-  // Bryan A006: compute from allTx directly — group by calendar month
-  const a006Tx = allTx.filter(t => t.acct === 'A006')
+  // Bryan A006: true running balance per calendar month.
+  // All Income (including starting balance lump) and Expense transactions are included.
+  // Sorted by date, cumulative sum gives end-of-month balance.
+  const a006Tx = allTx.filter(t => t.acct === 'A006').sort((a, b) => a.date - b.date)
   const a006MonthMap = {}
   a006Tx.forEach(t => {
     if (!t.date) return
-    const key = t.date.getFullYear() + '-' + String(t.date.getMonth() + 1).padStart(2, '0')
-    if (!a006MonthMap[key]) a006MonthMap[key] = { year: t.date.getFullYear(), month: t.date.getMonth() + 1, flow: 0 }
-    a006MonthMap[key].flow += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+    const yr = t.date.getFullYear()
+    const mo = t.date.getMonth() + 1
+    const key = yr + '-' + String(mo).padStart(2, '0')
+    if (!a006MonthMap[key]) a006MonthMap[key] = { year: yr, month: mo, net: 0 }
+    a006MonthMap[key].net += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
   })
-  const a006History = Object.values(a006MonthMap)
-    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
-    // Exclude the starting balance month (usually a large one-off Income lump)
-    // Detect: first month where Income >> monthly deposit ($1,500) by >5x
-    .filter((m, idx, arr) => {
-      if (idx !== 0) return true // only filter first month potentially
-      const typicalDeposit = 1500
-      return Math.abs(m.flow) < typicalDeposit * 5 // if first month flow is normal, keep it
-    })
   let a006Running = 0
-  savingsHistory['A006'] = a006History.map(m => {
-    a006Running += m.flow
-    return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(a006Running) }
-  })
+  savingsHistory['A006'] = Object.values(a006MonthMap)
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
+    .map(m => {
+      a006Running += m.net
+      return { label: monthLabel(m.year, m.month), balance: Math.round(a006Running) }
+    })
 
   // Joint A008: use Bank_Balance sheet
   SAVINGS_ACCOUNTS.filter(sa => sa.id !== 'A006').forEach(sa => {
@@ -598,8 +600,8 @@ function getMockBankData() {
       Natalie: [{ n: 'CCA', v: 830 }, { n: 'Tuition', v: 791.30 }, { n: 'Investment', v: 200 }],
     },
     savingsHistory: {
-      // A006 computed from Bank_Tx: Jan deposit $1500, Feb net = $4750-$1000-$1500-$1100 = $1150
-      A006: [{ label: 'Jan 26', flow: 1500, balance: 1500 }, { label: 'Feb 26', flow: 1150, balance: 2650 }],
+      // A006 true running balance: Feb = $12800+$4750=$17550, Mar = $17550-$3600=$13950
+      A006: [{ label: 'Feb 26', balance: 17550 }, { label: 'Mar 26', balance: 13950 }],
       A008: [{ label: 'Jan 26', flow: 10869, balance: 10869 }, { label: 'Feb 26', flow: 320, balance: 11189 }],
     },
   }
@@ -1276,7 +1278,10 @@ function PayPeriodSummary({ period }) {
   const savOutflow  = (savCats  || []).reduce((s, c) => s + c.v, 0)
   const totalOutflow = bankOutflow + savOutflow
   const returnsTotal = savingsReturns?.reduce((s, r) => s + r.amt, 0) || 0
-  const remaining = income - (grossToSavings || 0) + returnsTotal - bankOutflow
+  // Only add back transfers that physically returned to the bank (not Investment/Holiday).
+  // transfersBackToBank is defined for Bryan; other owners have no savings complexity.
+  const actualReturns = period.transfersBackToBank ?? returnsTotal
+  const remaining = income - (grossToSavings || 0) + actualReturns - bankOutflow
   // Budget used % based on bank outflows + net savings vs income
   const netSav = (grossToSavings || 0) - returnsTotal
   const totalUsed = bankOutflow + netSav
@@ -1348,11 +1353,25 @@ function CascadeDiagram() {
 }
 
 // Savings MoM: ComposedChart with bar (net flow) + line (running balance)
-function SavingsChart({ history, color }) {
-  if (!history?.length) return <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 11 }}>No data yet — add rows to Bank_Balance</div>
-  // Compute domain so negative bars render below the zero axis
-  const minFlow = Math.min(0, ...history.map(h => h.flow))
-  const maxVal  = Math.max(...history.map(h => Math.max(h.flow, h.balance)))
+function SavingsChart({ history, color, balanceOnly = false }) {
+  if (!history?.length) return <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 11 }}>No data yet</div>
+  const fmtTick = v => (Math.abs(v) >= 1000 ? (v < 0 ? '-' : '') + 'S$' + (Math.abs(v) / 1000).toFixed(0) + 'k' : 'S$' + v)
+  if (balanceOnly) {
+    return (
+      <ResponsiveContainer width="100%" height={140}>
+        <LineChart data={history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
+          <YAxis tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} tickFormatter={fmtTick} />
+          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: `1px solid ${C.border}` }}
+            formatter={val => [fmtSGD(val), 'Balance']} />
+          <Line type="monotone" dataKey="balance" stroke={color} strokeWidth={2} dot={{ r: 4, fill: color }} />
+        </LineChart>
+      </ResponsiveContainer>
+    )
+  }
+  const minFlow = Math.min(0, ...history.map(h => h.flow ?? 0))
+  const maxVal  = Math.max(...history.map(h => Math.max(h.flow ?? 0, h.balance ?? 0)))
   const domainMin = Math.floor(minFlow * 1.3 / 1000) * 1000
   const domainMax = Math.ceil(maxVal  * 1.1 / 1000) * 1000
   return (
@@ -1360,22 +1379,20 @@ function SavingsChart({ history, color }) {
       <ComposedChart data={history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
-        <YAxis
-          domain={[domainMin, domainMax]}
-          tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false}
-          tickFormatter={v => (v < 0 ? '-' : '') + 'S$' + (Math.abs(v) / 1000).toFixed(0) + 'k'} />
+        <YAxis domain={[domainMin, domainMax]} tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false}
+          tickFormatter={fmtTick} />
         <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: `1px solid ${C.border}` }}
           formatter={(val, name) => [(val < 0 ? '-' : '') + fmtSGD(Math.abs(val)), name === 'flow' ? 'Net flow' : 'Balance']} />
-        {/* Zero reference line so negative bars are clearly below it */}
         <ReferenceLine y={0} stroke={C.border} strokeWidth={1} />
         <Bar dataKey="flow" name="flow" radius={[3, 3, 0, 0]}>
-          {history.map((e, i) => <Cell key={i} fill={e.flow >= 0 ? color + 'cc' : C.red + 'cc'} />)}
+          {history.map((e, i) => <Cell key={i} fill={(e.flow ?? 0) >= 0 ? color + 'cc' : C.red + 'cc'} />)}
         </Bar>
         <Line type="monotone" dataKey="balance" name="balance" stroke={color} strokeWidth={2} dot={{ r: 3, fill: color }} />
       </ComposedChart>
     </ResponsiveContainer>
   )
 }
+
 
 // ─── Banking page ─────────────────────────────────────────────────────────────
 function BankingPage({ data, reload }) {
@@ -1479,11 +1496,10 @@ function BankingPage({ data, reload }) {
             {SAVINGS_ACCOUNTS.filter(sa => isAll || sa.owner === owner).map(sa => (
               <div key={sa.id} style={S.card}>
                 <div style={S.cardTitle}>{sa.label}</div>
-                <div style={S.cardSub}>Net flow (bars · +ve green / −ve red) + running balance (line)</div>
-                <SavingsChart history={savingsHistory[sa.id]} color={sa.color} />
+                <div style={S.cardSub}>{sa.id === 'A006' ? 'Running balance · end of month' : 'Net flow (bars · +ve green / −ve red) + running balance (line)'}</div>
+                <SavingsChart history={savingsHistory[sa.id]} color={sa.color} balanceOnly={sa.id === 'A006'} />
                 <div style={S.legend}>
-                  <LegendSquare color={sa.color + 'cc'} label="+ve flow" />
-                  <LegendSquare color={C.red + 'cc'} label="−ve flow" />
+                  {sa.id !== 'A006' && <><LegendSquare color={sa.color + 'cc'} label="+ve flow" /><LegendSquare color={C.red + 'cc'} label="−ve flow" /></>}
                   <LegendLine color={sa.color} label="Running balance" />
                 </div>
                 <Tag>Bank_Balance</Tag>
