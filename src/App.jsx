@@ -215,6 +215,9 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     Nathan:  t => t.acct === 'A009' && t.type === 'Income' && t.cat === 'Parents',
     Natalie: t => t.acct === 'A010' && t.type === 'Income' && t.cat === 'Parents',
   }
+  // Primary (bank) account per owner — income is only counted from this account
+  // to avoid double-counting savings account deposits as income
+  const PRIMARY_ACCT = { Bryan: 'A005', Joint: 'A007', Nathan: 'A009', Natalie: 'A010' }
   const TRIGGER_LABELS = {
     Bryan:   'Salary credited to A005',
     Joint:   "Bryan's transfer received in A007",
@@ -242,14 +245,15 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     }
     const daysIn = Math.floor((today - start) / (1000 * 60 * 60 * 24))
     const periodTx = allTx.filter(t => t.owner === owner && t.date >= start)
-    // Exclude A005 Income "Transfer" (return from savings) — it is already handled
-    // in the savings box netting and must not be double-counted in income
-    const income = periodTx
-      .filter(t => t.type === 'Income' && !(t.acct === 'A005' && t.cat === 'Transfer'))
-      .reduce((s, t) => s + t.amt, 0)
     const startLabel = start.toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })
 
     if (owner === 'Bryan') {
+      // Bryan income = A005 only (salary, interest, others).
+      // Exclude A005 Transfer income (the $1,100 return from savings — already in savings box).
+      // Exclude A006 income entirely (starting balance + transfer in are internal savings movements).
+      const income = periodTx
+        .filter(t => t.acct === 'A005' && t.type === 'Income' && t.cat !== 'Transfer')
+        .reduce((s, t) => s + t.amt, 0)
       const grossToSavings = periodTx
         .filter(t => t.acct === 'A005' && t.type === 'Expense' && t.cat === 'Savings')
         .reduce((s, t) => s + Math.abs(t.amt), 0)
@@ -272,6 +276,12 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
         periodStart: start, daysIn, startLabel, triggerLabel: TRIGGER_LABELS[owner],
       }
     } else {
+      // Non-Bryan: income = primary bank account Income only
+      // Excludes savings account deposits which are internal movements, not real income
+      const primaryAcct = PRIMARY_ACCT[owner]
+      const income = periodTx
+        .filter(t => t.acct === primaryAcct && t.type === 'Income')
+        .reduce((s, t) => s + t.amt, 0)
       const catMap = {}
       periodTx.filter(t => t.type === 'Expense')
         .forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + Math.abs(t.amt) })
