@@ -327,9 +327,8 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
   const balRows = bankBalanceRows.slice(1).filter(r => r[0] && r[2])
   const savingsHistory = {}
 
-  // Bryan A006: true running balance per calendar month.
-  // All Income (including starting balance lump) and Expense transactions are included.
-  // Sorted by date, cumulative sum gives end-of-month balance.
+  // Bryan A006: bars show monthly net flow excluding starting capital ('Others' income lump).
+  // Running balance line includes ALL transactions so it reflects true account value.
   const a006Tx = allTx.filter(t => t.acct === 'A006').sort((a, b) => a.date - b.date)
   const a006MonthMap = {}
   a006Tx.forEach(t => {
@@ -337,30 +336,42 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
     const yr = t.date.getFullYear()
     const mo = t.date.getMonth() + 1
     const key = yr + '-' + String(mo).padStart(2, '0')
-    if (!a006MonthMap[key]) a006MonthMap[key] = { year: yr, month: mo, net: 0 }
-    a006MonthMap[key].net += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+    if (!a006MonthMap[key]) a006MonthMap[key] = { year: yr, month: mo, flow: 0, balanceDelta: 0 }
+    const delta = (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
+    a006MonthMap[key].balanceDelta += delta
+    // Exclude 'Others' income (starting capital one-off) from the flow bar
+    if (!(t.type === 'Income' && t.cat === 'Others')) {
+      a006MonthMap[key].flow += delta
+    }
   })
   let a006Running = 0
   savingsHistory['A006'] = Object.values(a006MonthMap)
     .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
     .map(m => {
-      a006Running += m.net
-      return { label: monthLabel(m.year, m.month), balance: Math.round(a006Running) }
+      a006Running += m.balanceDelta
+      return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(a006Running) }
     })
 
-  // Joint A008: use Bank_Balance sheet
+  // Joint A008: compute from Bank_Tx directly, grouped by calendar month.
+  // All Income and Expense transactions included (no starting-capital exclusion needed for A008).
   SAVINGS_ACCOUNTS.filter(sa => sa.id !== 'A006').forEach(sa => {
-    const rows = balRows.filter(r => String(r[2]) === sa.id)
-      .sort((a, b) => {
-        const ya = Number(a[0]), yb = Number(b[0]), ma = Number(a[1]), mb = Number(b[1])
-        return ya !== yb ? ya - yb : ma - mb
-      })
-    let running = 0
-    savingsHistory[sa.id] = rows.map(r => {
-      const flow = toNum(r[4]) ?? 0
-      running += flow
-      return { label: monthLabel(Number(r[0]), Number(r[1])), flow: Math.round(flow), balance: Math.round(running) }
+    const acctTx = allTx.filter(t => t.acct === sa.id).sort((a, b) => a.date - b.date)
+    const monthMap = {}
+    acctTx.forEach(t => {
+      if (!t.date) return
+      const yr = t.date.getFullYear()
+      const mo = t.date.getMonth() + 1
+      const key = yr + '-' + String(mo).padStart(2, '0')
+      if (!monthMap[key]) monthMap[key] = { year: yr, month: mo, flow: 0 }
+      monthMap[key].flow += (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
     })
+    let running = 0
+    savingsHistory[sa.id] = Object.values(monthMap)
+      .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
+      .map(m => {
+        running += m.flow
+        return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(running) }
+      })
   })
 
   return { accountBalances, payPeriodData, ytdData, savingsHistory }
@@ -600,8 +611,10 @@ function getMockBankData() {
       Natalie: [{ n: 'CCA', v: 830 }, { n: 'Tuition', v: 791.30 }, { n: 'Investment', v: 200 }],
     },
     savingsHistory: {
-      // A006 true running balance: Feb = $12800+$4750=$17550, Mar = $17550-$3600=$13950
-      A006: [{ label: 'Feb 26', balance: 17550 }, { label: 'Mar 26', balance: 13950 }],
+      // A006: flow excludes starting capital, balance includes all
+      // Feb flow = +$4750 (deposit only), balance = $17550 (incl $12800 starting capital)
+      // Mar flow = -$3600 (outflows), balance = $13950
+      A006: [{ label: 'Feb 26', flow: 4750, balance: 17550 }, { label: 'Mar 26', flow: -3600, balance: 13950 }],
       A008: [{ label: 'Jan 26', flow: 10869, balance: 10869 }, { label: 'Feb 26', flow: 320, balance: 11189 }],
     },
   }
@@ -1496,10 +1509,11 @@ function BankingPage({ data, reload }) {
             {SAVINGS_ACCOUNTS.filter(sa => isAll || sa.owner === owner).map(sa => (
               <div key={sa.id} style={S.card}>
                 <div style={S.cardTitle}>{sa.label}</div>
-                <div style={S.cardSub}>{sa.id === 'A006' ? 'Running balance · end of month' : 'Net flow (bars · +ve green / −ve red) + running balance (line)'}</div>
-                <SavingsChart history={savingsHistory[sa.id]} color={sa.color} balanceOnly={sa.id === 'A006'} />
+                <div style={S.cardSub}>Net flow bars (+ve green / −ve red) · running balance line</div>
+                <SavingsChart history={savingsHistory[sa.id]} color={sa.color} />
                 <div style={S.legend}>
-                  {sa.id !== 'A006' && <><LegendSquare color={sa.color + 'cc'} label="+ve flow" /><LegendSquare color={C.red + 'cc'} label="−ve flow" /></>}
+                  <LegendSquare color={sa.color + 'cc'} label="+ve flow" />
+                  <LegendSquare color={C.red + 'cc'} label="−ve flow" />
                   <LegendLine color={sa.color} label="Running balance" />
                 </div>
                 <Tag>Bank_Balance</Tag>
