@@ -1406,7 +1406,7 @@ function SavingsChart({ history, color, balanceOnly = false }) {
           formatter={(val, name) => [(val < 0 ? '-' : '') + fmtSGD(Math.abs(val)), name === 'flow' ? 'Net flow' : 'Balance']} />
         <ReferenceLine y={0} stroke={C.border} strokeWidth={1} />
         <Bar dataKey="flow" name="flow" radius={[3, 3, 0, 0]}>
-          {history.map((e, i) => <Cell key={i} fill={(e.flow ?? 0) >= 0 ? color + 'cc' : C.red + 'cc'} />)}
+          {history.map((e, i) => <Cell key={i} fill={(e.flow ?? 0) >= 0 ? '#10b981cc' : C.red + 'cc'} />)}
         </Bar>
         <Line type="monotone" dataKey="balance" name="balance" stroke={color} strokeWidth={2} dot={{ r: 3, fill: color }} />
       </ComposedChart>
@@ -1520,7 +1520,7 @@ function BankingPage({ data, reload }) {
                 <div style={S.cardSub}>Net flow bars (+ve green / −ve red) · running balance line</div>
                 <SavingsChart history={savingsHistory[sa.id]} color={sa.color} />
                 <div style={S.legend}>
-                  <LegendSquare color={sa.color + 'cc'} label="+ve flow" />
+                  <LegendSquare color="#10b981cc" label="+ve flow" />
                   <LegendSquare color={C.red + 'cc'} label="−ve flow" />
                   <LegendLine color={sa.color} label="Running balance" />
                 </div>
