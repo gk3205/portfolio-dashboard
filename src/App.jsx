@@ -1030,9 +1030,9 @@ function AllocationBars({ data }) {
         <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <span style={{ fontSize: 11, color: '#555', width: 70, flexShrink: 0 }}>{item.name}</span>
           <div style={{ flex: 1, height: 10, background: '#f0f0f0', borderRadius: 5, overflow: 'hidden' }}>
-            <div style={{ width: `${item.pct}%`, height: '100%', background: item.color, borderRadius: 5 }} />
+            <div style={{ width: `${item.barWidth ?? item.pct}%`, height: '100%', background: item.color, borderRadius: 5 }} />
           </div>
-          <span style={{ fontSize: 11, color: C.muted, width: 32, textAlign: 'right', flexShrink: 0 }}>{item.pct}%</span>
+          <span style={{ fontSize: 11, color: C.muted, width: 36, textAlign: 'right', flexShrink: 0 }}>{item.pctDisplay ?? item.pct + '%'}</span>
         </div>
       ))}
     </div>
@@ -1131,7 +1131,10 @@ function computeAllocation(holdings) {
   holdings.forEach(h => { map[h.assetClass] = (map[h.assetClass] || 0) + h.currentValue })
   const total = Object.values(map).reduce((a, b) => a + b, 0)
   return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({
-    name, value, pct: Math.round((value / total) * 100),
+    name, value,
+    pct: Math.round((value / total) * 100),
+    pctDisplay: value / total < 0.005 ? '<1%' : Math.round((value / total) * 100) + '%',
+    barWidth: Math.max((value / total) * 100, 0.5), // min 0.5% so bar is always visible
     color: ASSET_CLASS_COLORS[name] || ASSET_CLASS_COLORS.Other,
   }))
 }
