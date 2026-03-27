@@ -1539,7 +1539,7 @@ function BankingPage({ data, reload }) {
 
 
 // ─── Holiday Fund page ────────────────────────────────────────────────────────
-function HolidayPage({ data, reload }) {
+function HolidayPage({ data, reload, accountBalances }) {
   const [drillYear, setDrillYear] = useState(null)
   const {
     ytdDeposits, ytdExpenses, currentHolYearSpend,
@@ -1585,7 +1585,7 @@ function HolidayPage({ data, reload }) {
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 12 }}>
-        <KPICard label="Fund balance" value={fmtSGD(13575)} sub="A011 current balance" source="Account Balance" />
+        <KPICard label="Fund balance" value={fmtSGD(accountBalances?.A011 ?? 13575)} sub="A011 current balance" source="Account Balance" />
         <KPICard label={`Saved YTD ${currentYear}`} value={fmtSGD(ytdDeposits)} sub="Deposits by transaction date" color={C.green} source="Holiday Fund" />
         <KPICard label={`Spent YTD ${currentYear}`} value={ytdExpenses > 0 ? fmtSGD(ytdExpenses) : 'S$0'} sub={ytdExpenses > 0 ? 'Expenses by transaction date' : 'No expense transactions yet'} color={ytdExpenses > 0 ? C.red : C.muted} source="Holiday Fund" />
         <KPICard label="Avg annual spend" value={fmtSGD(avgAnnual)} sub="Average across completed years" source="Holiday Fund" />
@@ -1686,7 +1686,7 @@ function HolidayPage({ data, reload }) {
 
 
 // ─── House Fund page ──────────────────────────────────────────────────────────
-function HousePage({ data, reload }) {
+function HousePage({ data, reload, accountBalances }) {
   const [drillYear, setDrillYear] = useState(null)
   const {
     ytdSaved, ytdSpent, currentYearCats, avgAnnual,
@@ -1727,7 +1727,7 @@ function HousePage({ data, reload }) {
 
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 12 }}>
-        <KPICard label="Fund balance" value={fmtSGD(20294)} sub="A012 current balance" source="Account Balance" />
+        <KPICard label="Fund balance" value={fmtSGD(accountBalances?.A012 ?? 20294)} sub="A012 current balance" source="Account Balance" />
         <KPICard label={`Saved YTD ${currentYear}`} value={fmtSGD(ytdSaved)} sub="Deposits + interest income" color={C.green} source="House Fund" />
         <KPICard label={`Spent YTD ${currentYear}`} value={ytdSpent > 0 ? fmtSGD(ytdSpent) : 'S$0'} sub={ytdSpent > 0 ? 'Expenses by transaction date' : 'No expenses yet'} color={ytdSpent > 0 ? C.red : C.muted} source="House Fund" />
         <KPICard label="Avg annual spend" value={fmtSGD(avgAnnual)} sub="Average across completed years" source="House Fund" />
@@ -1871,8 +1871,8 @@ export default function App() {
 
       {page === 'investments' && invData    && <InvestmentPage data={invData}    reload={reload} />}
       {page === 'banking'     && bankData   && <BankingPage   data={bankData}   reload={reload} />}
-      {page === 'holiday'     && holidayData && <HolidayPage  data={holidayData} reload={reload} />}
-      {page === 'house'       && houseData   && <HousePage    data={houseData}   reload={reload} />}
+      {page === 'holiday'     && holidayData && <HolidayPage  data={holidayData} reload={reload} accountBalances={bankData?.accountBalances} />}
+      {page === 'house'       && houseData   && <HousePage    data={houseData}   reload={reload} accountBalances={bankData?.accountBalances} />}
     </div>
   )
 }
