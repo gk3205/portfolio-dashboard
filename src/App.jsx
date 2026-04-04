@@ -189,6 +189,9 @@ function transformInvData({ invRows, cashRows, snapshotRows, txRows }) {
   return { allHoldings, snapshotData, xirr }
 }
 
+// Primary bank account per owner — used in both data transform and rendering
+const PRIMARY_ACCT = { Bryan: 'A005', Joint: 'A007', Nathan: 'A009', Natalie: 'A010' }
+
 // ─── Banking data transform ───────────────────────────────────────────────────
 function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accountBalanceRows }) {
   const TX = { DATE: 1, ACCT: 2, OWNER: 3, TYPE: 5, CAT: 6, AMT: 7, REMARKS: 8 }
@@ -215,9 +218,7 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
   const TRIGGERS = {
     Bryan: t => t.acct === 'A005' && t.type === 'Income' && t.cat === 'Salary',
   }
-  // Primary (bank) account per owner — income is only counted from this account
-  // to avoid double-counting savings account deposits as income
-  const PRIMARY_ACCT = { Bryan: 'A005', Joint: 'A007', Nathan: 'A009', Natalie: 'A010' }
+  // Primary (bank) account per owner — defined at module level as PRIMARY_ACCT
   const TRIGGER_LABELS = {
     Bryan:   'Salary credited to A005',
     Joint:   'Pay period from 24th',
@@ -1302,22 +1303,17 @@ function BryanSavingsBox({ grossToSavings, savingsReturns, netSavings }) {
 }
 
 // Pay period summary — income, savings box (Bryan), outflows, remaining + progress bars
-function PayPeriodSummary({ period }) {
+function PayPeriodSummary({ period, bankBalance }) {
   const { income, bankCats, savCats, grossToSavings, savingsReturns, netSavings, daysIn, startLabel } = period
-  // A006 external spend (Holiday, Investment) comes out of savings, not salary.
-  // Remaining = what's left in the bank account after salary allocations.
-  // A006 spend is already tracked via the net savings figure.
   const bankOutflow = (bankCats || []).reduce((s, c) => s + c.v, 0)
   const savOutflow  = (savCats  || []).reduce((s, c) => s + c.v, 0)
   const totalOutflow = bankOutflow + savOutflow
   const returnsTotal = savingsReturns?.reduce((s, r) => s + r.amt, 0) || 0
-  // Only add back transfers that physically returned to the bank (not Investment/Holiday).
-  // transfersBackToBank is defined for Bryan; other owners have no savings complexity.
-  const actualReturns = period.transfersBackToBank ?? returnsTotal
-  const remaining = income - (grossToSavings || 0) + actualReturns - bankOutflow
-  // Budget used % based on bank outflows + net savings vs income
-  const netSav = (grossToSavings || 0) - returnsTotal
-  const totalUsed = bankOutflow + netSav
+  // Remaining = actual current bank account balance (ground truth).
+  // Reconstructing from flows is unreliable — use the real balance instead.
+  const remaining = bankBalance ?? 0
+  // Budget used % = (income - remaining) / income, capped at 100%
+  const totalUsed = income - remaining
   const usedPct = income > 0 ? Math.min(Math.round(totalUsed / income * 100), 100) : 100
   const remPct = Math.max(0, 100 - usedPct)
   const col = remPct > 30 ? C.green : remPct > 10 ? C.amber : C.red
@@ -1500,7 +1496,7 @@ function BankingPage({ data, reload }) {
             <div style={S.card}>
               <div style={S.cardTitle}>Pay period summary</div>
               <div style={S.cardSub}>Income received vs all outflows</div>
-              <PayPeriodSummary period={period} />
+              <PayPeriodSummary period={period} bankBalance={accountBalances[PRIMARY_ACCT[owner]]} />
               <Tag>Bank_Tx</Tag>
             </div>
           </div>
