@@ -168,18 +168,41 @@ function transformInvData({ invRows, cashRows, snapshotRows, txRows }) {
   }))
   const allHoldings = [...holdings, ...cashHoldings]
 
-  const ownerIndexedKey = { Bryan: SNAP_COLS.BRYAN_INDEXED, Joint: SNAP_COLS.JOINT_INDEXED, Nathan: SNAP_COLS.NATHAN_INDEXED, Natalie: SNAP_COLS.NATALIE_INDEXED }
-  const ownerSP500Key  = { Bryan: SNAP_COLS.BRYAN_SP500, Joint: SNAP_COLS.JOINT_SP500, Nathan: SNAP_COLS.NATHAN_SP500, Natalie: SNAP_COLS.NATALIE_SP500 }
-  const ownerMonthlyKey = { Bryan: SNAP_COLS.BRYAN_MONTHLY_RET, Joint: SNAP_COLS.JOINT_MONTHLY_RET, Nathan: SNAP_COLS.NATHAN_MONTHLY_RET, Natalie: SNAP_COLS.NATALIE_MONTHLY_RET }
-  const snapshotData = snapshotRows.slice(1).filter(r => r[SNAP_COLS.DATE]).map(r => {
-    const date = parseDate(r[SNAP_COLS.DATE])
-    const label = date ? date.toLocaleDateString('en-SG', { month: 'short', year: '2-digit' }) : String(r[SNAP_COLS.DATE])
-    const row = { date: label }
-    OWNERS.filter(o => o !== 'All Owners').forEach(o => {
-      row[o] = toNum(r[ownerIndexedKey[o]])
-      row[`${o}_sp500`] = toNum(r[ownerSP500Key[o]])
-      row[`${o}_ret`] = normPct(toNum(r[ownerMonthlyKey[o]]))
+  const ownerValueKeys = {
+    Bryan:   SNAP_COLS.BRYAN_VALUE,
+    Joint:   SNAP_COLS.JOINT_VALUE,
+    Nathan:  SNAP_COLS.NATHAN_VALUE,
+    Natalie: SNAP_COLS.NATALIE_VALUE,
+  }
+  const snapRawRows = snapshotRows.slice(1).filter(r =>
+    r[SNAP_COLS.DATE] && toNum(r[SNAP_COLS.BRYAN_VALUE]) !== null
+  )
+  const snapshotData = snapRawRows.map((r, i) => {
+    const date  = parseDate(r[SNAP_COLS.DATE])
+    const label = date
+      ? date.toLocaleDateString('en-SG', { month: 'short', year: '2-digit' })
+      : String(r[SNAP_COLS.DATE])
+    const prev  = i > 0 ? snapRawRows[i - 1] : null
+    const first = snapRawRows[0]
+    const row   = { date: label }
+
+    OWNERS.filter(o => o !== 'All Owners').forEach(owner => {
+      const key = ownerValueKeys[owner]
+      const v = toNum(r[key]) ?? 0
+      const p = prev ? (toNum(prev[key]) ?? v) : v
+      const f = toNum(first[key]) ?? v
+      row[`${owner}_value`]   = v
+      row[`${owner}_ret`]     = p > 0 ? +((v / p - 1) * 100).toFixed(2) : 0
+      row[`${owner}_indexed`] = f > 0 ? +((v / f) * 100).toFixed(2) : 100
+      row[`${owner}_gain`]    = v - f
     })
+
+    const sp   = toNum(r[SNAP_COLS.SP500_CLOSE])
+    const sp_p = prev ? toNum(prev[SNAP_COLS.SP500_CLOSE]) : sp
+    const sp_f = toNum(first[SNAP_COLS.SP500_CLOSE])
+    row.sp500         = sp
+    row.sp500_ret     = (sp && sp_p && sp_p > 0) ? +((sp / sp_p - 1) * 100).toFixed(2) : 0
+    row.sp500_indexed = (sp && sp_f && sp_f > 0) ? +((sp / sp_f) * 100).toFixed(2) : 100
     return row
   })
 
@@ -519,41 +542,69 @@ function getMockHolidayRows() {
 }
 
 function getMockInvData() {
-  const months = ['Jul 24','Aug 24','Sep 24','Oct 24','Nov 24','Dec 24','Jan 25','Feb 25','Mar 25']
-  const snap = months.map((date, i) => ({
-    date,
-    Bryan: Math.round(100 + i * 3.8), Joint: Math.round(100 + i * 2.2),
-    Nathan: Math.round(100 + i * 5.2), Natalie: Math.round(100 + i * 4.1),
-    Bryan_sp500: Math.round(100 + i * 2.8), Joint_sp500: Math.round(100 + i * 2.8),
-    Nathan_sp500: Math.round(100 + i * 2.8), Natalie_sp500: Math.round(100 + i * 2.8),
-    Bryan_ret: +(((Math.random() - 0.4) * 5).toFixed(2)),
-    Joint_ret: +(((Math.random() - 0.4) * 5).toFixed(2)),
-    Nathan_ret: +(((Math.random() - 0.4) * 5).toFixed(2)),
-    Natalie_ret: +(((Math.random() - 0.4) * 5).toFixed(2)),
-  }))
+  // Raw snapshots: [date-string, Bryan, Joint, Nathan, Natalie, SP500-close]
+  // These are illustrative — update with real brokerage values if you have them.
+  const rawSnap = [
+    ['2025-11-30', 175000,  375000,  90000,  85000, 5910],
+    ['2025-12-31', 180200,  384500,  93500,  87300, 5882],
+    ['2026-01-31', 187600,  402000,  98100,  92200, 6141],
+    ['2026-02-28', 191200,  412500, 104200,  97600, 5955],
+    ['2026-03-31', 183500,  396000, 101300,  94100, 5612],
+    ['2026-04-18', 197062,  420245, 107354,  99272, 5300],
+  ]
+  const ownerCols = { Bryan: 1, Joint: 2, Nathan: 3, Natalie: 4 }
+
+  const snapshotData = rawSnap.map((r, i) => {
+    const date  = new Date(r[0])
+    const label = date.toLocaleDateString('en-SG', { month: 'short', year: '2-digit' })
+    const prev  = i > 0 ? rawSnap[i - 1] : null
+    const first = rawSnap[0]
+    const row   = { date: label }
+
+    Object.entries(ownerCols).forEach(([owner, col]) => {
+      const v = r[col]
+      const p = prev ? prev[col] : v
+      const f = first[col]
+      row[`${owner}_value`]   = v
+      row[`${owner}_ret`]     = p > 0 ? +((v / p - 1) * 100).toFixed(2) : 0
+      row[`${owner}_indexed`] = f > 0 ? +((v / f) * 100).toFixed(2) : 100
+      row[`${owner}_gain`]    = v - f
+    })
+
+    const sp = r[5], sp_p = prev ? prev[5] : sp, sp_f = first[5]
+    row.sp500         = sp
+    row.sp500_ret     = sp_p > 0 ? +((sp / sp_p - 1) * 100).toFixed(2) : 0
+    row.sp500_indexed = sp_f > 0 ? +((sp / sp_f) * 100).toFixed(2) : 100
+    return row
+  })
+
   return {
     allHoldings: [
-      { ticker: 'CSPX', owner: 'Bryan', assetClass: 'ETF', costBasis: 16868, currentValue: 21051, gainLoss: 4183, gainPct: 24.8, dayChangePct: -0.81 },
-      { ticker: 'D05',  owner: 'Bryan', assetClass: 'Equity', costBasis: 12475, currentValue: 16594, gainLoss: 4119, gainPct: 33.0, dayChangePct: null },
-      { ticker: 'Dim World 80/20', owner: 'Bryan', assetClass: 'Fund', costBasis: 41000, currentValue: 48019, gainLoss: 7019, gainPct: 17.1, dayChangePct: null },
-      { ticker: 'Cash', owner: 'Bryan', assetClass: 'Cash', costBasis: 142, currentValue: 142, gainLoss: 0, gainPct: 0, dayChangePct: null },
-      { ticker: 'HKG:0700', owner: 'Joint', assetClass: 'Equity', costBasis: 18036, currentValue: 35848, gainLoss: 17812, gainPct: 98.8, dayChangePct: 0.18 },
-      { ticker: 'Joint iFAST', owner: 'Joint', assetClass: 'Fund', costBasis: 75000, currentValue: 87106, gainLoss: 12106, gainPct: 16.1, dayChangePct: null },
-      { ticker: 'ASTLC 6.35%', owner: 'Joint', assetClass: 'Bond', costBasis: 13356, currentValue: 13309, gainLoss: -47, gainPct: -0.3, dayChangePct: null },
-      { ticker: 'Cash', owner: 'Joint', assetClass: 'Cash', costBasis: 59183, currentValue: 59183, gainLoss: 0, gainPct: 0, dayChangePct: null },
-      { ticker: 'CSPX', owner: 'Nathan', assetClass: 'ETF', costBasis: 16582, currentValue: 19220, gainLoss: 2638, gainPct: 15.9, dayChangePct: -0.81 },
-      { ticker: 'Nathan iFAST', owner: 'Nathan', assetClass: 'Fund', costBasis: 44550, currentValue: 50082, gainLoss: 5532, gainPct: 12.4, dayChangePct: null },
-      { ticker: 'Cash', owner: 'Nathan', assetClass: 'Cash', costBasis: 87, currentValue: 87, gainLoss: 0, gainPct: 0, dayChangePct: null },
-      { ticker: 'CSPX', owner: 'Natalie', assetClass: 'ETF', costBasis: 15160, currentValue: 17390, gainLoss: 2230, gainPct: 14.7, dayChangePct: -0.81 },
-      { ticker: 'Natalie iFAST', owner: 'Natalie', assetClass: 'Fund', costBasis: 36300, currentValue: 41715, gainLoss: 5415, gainPct: 14.9, dayChangePct: null },
-      { ticker: 'Cash', owner: 'Natalie', assetClass: 'Cash', costBasis: 374, currentValue: 374, gainLoss: 0, gainPct: 0, dayChangePct: null },
+      { ticker: 'CSPX',                       owner: 'Bryan',   assetClass: 'ETF',    costBasis: 18714,  currentValue: 24341,  gainLoss: 5627,   gainPct: 30.1,  dayChangePct: 1.38  },
+      { ticker: 'Dimensional World 80/20_SGD', owner: 'Bryan',   assetClass: 'Fund',   costBasis: 43000,  currentValue: 51949,  gainLoss: 8949,   gainPct: 20.8,  dayChangePct: null  },
+      { ticker: 'LON:EXUS',                   owner: 'Bryan',   assetClass: 'ETF',    costBasis: 19107,  currentValue: 20598,  gainLoss: 1491,   gainPct: 7.8,   dayChangePct: 1.61  },
+      { ticker: 'D05',                         owner: 'Bryan',   assetClass: 'Equity', costBasis: 12475,  currentValue: 17175,  gainLoss: 4700,   gainPct: 37.7,  dayChangePct: null  },
+      { ticker: 'S68',                         owner: 'Bryan',   assetClass: 'Equity', costBasis: 12259,  currentValue: 17064,  gainLoss: 4805,   gainPct: 39.2,  dayChangePct: null  },
+      { ticker: 'NVO',                         owner: 'Bryan',   assetClass: 'Equity', costBasis: 21253,  currentValue: 15439,  gainLoss: -5813,  gainPct: -27.4, dayChangePct: -1.00 },
+      { ticker: 'IWQU',                        owner: 'Bryan',   assetClass: 'ETF',    costBasis: 12780,  currentValue: 13382,  gainLoss: 602,    gainPct: 4.7,   dayChangePct: 1.12  },
+      { ticker: 'Cash',                        owner: 'Bryan',   assetClass: 'Cash',   costBasis: 8737,   currentValue: 8737,   gainLoss: 0,      gainPct: 0,     dayChangePct: null  },
+      { ticker: 'HKG:0700',                   owner: 'Joint',   assetClass: 'Equity', costBasis: 18036,  currentValue: 33094,  gainLoss: 15058,  gainPct: 83.5,  dayChangePct: -1.26 },
+      { ticker: 'O39',                         owner: 'Joint',   assetClass: 'Equity', costBasis: 29811,  currentValue: 40896,  gainLoss: 11085,  gainPct: 37.2,  dayChangePct: null  },
+      { ticker: 'Joint_iFAST DPMS',            owner: 'Joint',   assetClass: 'Fund',   costBasis: 50212,  currentValue: 60772,  gainLoss: 10560,  gainPct: 21.0,  dayChangePct: null  },
+      { ticker: 'Cash',                        owner: 'Joint',   assetClass: 'Cash',   costBasis: 76193,  currentValue: 76193,  gainLoss: 0,      gainPct: 0,     dayChangePct: null  },
+      { ticker: 'Nathan_iFAST DPMS',           owner: 'Nathan',  assetClass: 'Fund',   costBasis: 44700,  currentValue: 51737,  gainLoss: 7037,   gainPct: 15.7,  dayChangePct: null  },
+      { ticker: 'CSPX',                        owner: 'Nathan',  assetClass: 'ETF',    costBasis: 16582,  currentValue: 20446,  gainLoss: 3864,   gainPct: 23.3,  dayChangePct: 1.38  },
+      { ticker: 'Cash',                        owner: 'Nathan',  assetClass: 'Cash',   costBasis: 195,    currentValue: 195,    gainLoss: 0,      gainPct: 0,     dayChangePct: null  },
+      { ticker: 'Natalie_iFAST DPMS',          owner: 'Natalie', assetClass: 'Fund',   costBasis: 36500,  currentValue: 43164,  gainLoss: 6664,   gainPct: 18.3,  dayChangePct: null  },
+      { ticker: 'CSPX',                        owner: 'Natalie', assetClass: 'ETF',    costBasis: 15160,  currentValue: 18499,  gainLoss: 3339,   gainPct: 22.0,  dayChangePct: 1.38  },
+      { ticker: 'Cash',                        owner: 'Natalie', assetClass: 'Cash',   costBasis: 263,    currentValue: 263,    gainLoss: 0,      gainPct: 0,     dayChangePct: null  },
     ],
-    snapshotData: snap,
+    snapshotData,
     xirr: [
-      { owner: 'Bryan', xirr: 13.2, value: 169767 },
-      { owner: 'Joint', xirr: 8.8, value: 393680 },
-      { owner: 'Nathan', xirr: 18.4, value: 97706 },
-      { owner: 'Natalie', xirr: 14.7, value: 90404 },
+      { owner: 'Bryan',   xirr: 40.4, value: 197062 },
+      { owner: 'Joint',   xirr: 24.1, value: 420245 },
+      { owner: 'Nathan',  xirr: 22.6, value: 107354 },
+      { owner: 'Natalie', xirr: 19.8, value: 99272  },
     ],
   }
 }
@@ -1016,20 +1067,117 @@ function KPICard({ label, value, sub, color, source }) {
 
 // ─── Investment page components ───────────────────────────────────────────────
 function GrowthChart({ data, owner }) {
-  if (!data || data.length < 2) return <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 11 }}>Add more rows to Portfolio Snapshot to see the chart</div>
+  const [mode, setMode] = useState('indexed') // 'indexed' | 'gain'
+
+  if (!data || data.length < 2) {
+    return (
+      <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 11 }}>
+        Run snapshotToday() in Apps Script to add your first data point
+      </div>
+    )
+  }
+
+  const isAll     = owner === 'All Owners'
+  const ownerList = OWNERS.filter(o => o !== 'All Owners')
+  const oc        = C.ownerLines[owner] || C.green
+
+  // Build chart data from pre-computed snapshot fields
+  const chartData = data.map(r => {
+    const row = { date: r.date }
+    if (isAll) {
+      ownerList.forEach(o => {
+        row[o] = mode === 'indexed' ? r[`${o}_indexed`] : r[`${o}_gain`]
+      })
+    } else {
+      row['Portfolio'] = mode === 'indexed' ? r[`${owner}_indexed`] : r[`${owner}_gain`]
+    }
+    if (mode === 'indexed') row['S&P500'] = r.sp500_indexed
+    return row
+  })
+
+  const fmtY = v => {
+    if (mode === 'gain') {
+      if (v === 0) return 'S$0'
+      return (v >= 0 ? '+' : '') + (Math.abs(v) >= 1000 ? 'S$' + (v / 1000).toFixed(0) + 'k' : 'S$' + v)
+    }
+    return v.toFixed(0)
+  }
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    return (
+      <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', fontSize: 11 }}>
+        <div style={{ fontWeight: 500, marginBottom: 4, color: C.muted }}>{label}</div>
+        {payload.map(p => (
+          <div key={p.name} style={{ color: p.stroke || '#333', marginTop: 2 }}>
+            <span style={{ color: C.muted }}>{p.name}:</span>{' '}
+            <span style={{ fontWeight: 500 }}>
+              {mode === 'gain'
+                ? (p.value >= 0 ? '+' : '') + fmtSGD(p.value)
+                : p.value?.toFixed(1)
+              }
+            </span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   return (
-    <ResponsiveContainer width="100%" height={180}>
-      <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-        <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
-        <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: `1px solid ${C.border}` }} labelStyle={{ color: C.muted }} />
-        {owner === 'All Owners'
-          ? OWNERS.filter(o => o !== 'All Owners').map(o => <Line key={o} type="monotone" dataKey={o} stroke={C.ownerLines[o]} strokeWidth={2} dot={false} name={o} />)
-          : <><Line type="monotone" dataKey="portfolio" stroke={C.ownerLines[owner] || C.green} strokeWidth={2} dot={false} name={owner} /><Line type="monotone" dataKey="sp500" stroke="#f87171" strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="S&P500" /></>
+    <div>
+      {/* Mode toggle */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 10 }}>
+        {[
+          { key: 'indexed', label: 'Indexed to 100' },
+          { key: 'gain',    label: 'S$ Gain'         },
+        ].map(m => (
+          <button key={m.key} onClick={() => setMode(m.key)} style={{
+            padding: '3px 10px', borderRadius: 5, fontSize: 10, cursor: 'pointer',
+            border: `1px solid ${C.border}`,
+            background: mode === m.key ? '#111' : C.card,
+            color:      mode === m.key ? '#fff' : C.muted,
+            fontWeight: mode === m.key ? 500 : 400,
+            transition: 'all .1s',
+          }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
+          <YAxis tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} tickFormatter={fmtY} />
+          <Tooltip content={<CustomTooltip />} />
+
+          {/* Owner lines */}
+          {isAll
+            ? ownerList.map(o => (
+                <Line key={o} type="monotone" dataKey={o}
+                  stroke={C.ownerLines[o]} strokeWidth={2} dot={false} />
+              ))
+            : <Line type="monotone" dataKey="Portfolio"
+                stroke={oc} strokeWidth={2.5} dot={false} />
+          }
+
+          {/* S&P500 benchmark — indexed mode only */}
+          {mode === 'indexed' && (
+            <Line type="monotone" dataKey="S&P500"
+              stroke="#f87171" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+          )}
+        </LineChart>
+      </ResponsiveContainer>
+
+      <div style={S.legend}>
+        {isAll
+          ? ownerList.map(o => <LegendLine key={o} color={C.ownerLines[o]} label={o} />)
+          : <LegendLine color={oc} label={owner} />
         }
-      </LineChart>
-    </ResponsiveContainer>
+        {mode === 'indexed' && <LegendLine color="#f87171" label="S&P500" dashed />}
+        {mode === 'gain' && <span style={{ fontSize: 10, color: C.hint }}>S$ gain from first snapshot</span>}
+      </div>
+    </div>
   )
 }
 function AllocationBars({ data }) {
@@ -1148,18 +1296,28 @@ function computeAllocation(holdings) {
     color: ASSET_CLASS_COLORS[name] || ASSET_CLASS_COLORS.Other,
   }))
 }
-function getGrowthData(snapshotData, owner) {
-  if (owner === 'All Owners') return snapshotData.map(r => ({ date: r.date, ...Object.fromEntries(OWNERS.filter(o => o !== 'All Owners').map(o => [o, r[o]])) }))
-  return snapshotData.map(r => ({ date: r.date, portfolio: r[owner], sp500: r[`${owner}_sp500`] }))
-}
+
 function getMonthlyData(snapshotData, owner) {
-  return snapshotData.filter(r => owner === 'All Owners' ? true : r[`${owner}_ret`] !== null).map(r => {
-    if (owner === 'All Owners') {
-      const rets = OWNERS.filter(o => o !== 'All Owners').map(o => r[`${o}_ret`]).filter(v => v !== null)
-      return { month: r.date, portfolio: rets.length ? +(rets.reduce((a, b) => a + b, 0) / rets.length).toFixed(2) : 0, sp500: 0 }
-    }
-    return { month: r.date, portfolio: r[`${owner}_ret`] ?? 0, sp500: r[`${owner}_sp500`] ?? 0 }
-  })
+  // Skip first row — it's the baseline (ret = 0, no prior month to compare)
+  const rows = snapshotData.slice(1)
+  if (!rows.length) return []
+
+  if (owner === 'All Owners') {
+    return rows.map(r => {
+      const ownerList = OWNERS.filter(o => o !== 'All Owners')
+      const rets = ownerList.map(o => r[`${o}_ret`] || 0)
+      return {
+        month:     r.date,
+        portfolio: +(rets.reduce((a, b) => a + b, 0) / rets.length).toFixed(2),
+        sp500:     +((r.sp500_ret || 0)).toFixed(2),
+      }
+    })
+  }
+  return rows.map(r => ({
+    month:     r.date,
+    portfolio: +((r[`${owner}_ret`] || 0)).toFixed(2),
+    sp500:     +((r.sp500_ret || 0)).toFixed(2),
+  }))
 }
 
 // ─── Investment page ───────────────────────────────────────────────────────────
@@ -1168,7 +1326,6 @@ function InvestmentPage({ data, reload }) {
   const filtered    = filterByOwner(data.allHoldings, owner)
   const kpis        = computeKPIs(filtered)
   const allocation  = computeAllocation(filtered)
-  const growthData  = getGrowthData(data.snapshotData, owner)
   const monthlyData = getMonthlyData(data.snapshotData, owner)
   const oc = C.ownerLines[owner] || C.green
   return (
@@ -1187,11 +1344,8 @@ function InvestmentPage({ data, reload }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 12, marginBottom: 12 }}>
         <div style={S.card}>
           <div style={S.cardTitle}>Portfolio growth vs benchmark (indexed to 100)</div>
-          <div style={S.cardSub}>{owner === 'All Owners' ? 'All owners overlaid' : `${owner} vs S&P500`} — Snapshot Date × Indexed value</div>
-          <GrowthChart data={growthData} owner={owner} />
-          <div style={S.legend}>
-            {owner === 'All Owners' ? OWNERS.filter(o => o !== 'All Owners').map(o => <LegendLine key={o} color={C.ownerLines[o]} label={o} />) : <><LegendLine color={oc} label={owner} /><LegendLine color="#f87171" label="S&P500" dashed /></>}
-          </div>
+          <div style={S.cardSub}>{owner === 'All Owners' ? 'All owners — indexed to 100' : `${owner} vs S&P500`} · Toggle for S$ gain</div>
+          <GrowthChart data={data.snapshotData} owner={owner} />
           <Tag>Portfolio_Snapshot</Tag>
         </div>
         <div style={S.card}>
