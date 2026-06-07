@@ -135,14 +135,19 @@ const fmtSGD = n => new Intl.NumberFormat('en-SG', { style: 'currency', currency
 const fmtPct = (n, d = 2) => (n >= 0 ? '+' : '') + n.toFixed(d) + '%'
 
 // ─── Fetching ─────────────────────────────────────────────────────────────────
-async function fetchRange(range) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?key=${API_KEY}&valueRenderOption=UNFORMATTED_VALUE`
+// Single batchGet call fetches all ranges at once — avoids per-minute quota limits
+// that occur when 10 parallel fetchRange calls fire simultaneously.
+async function fetchAllRanges(ranges) {
+  const params = ranges.map(r => `ranges=${encodeURIComponent(r)}`).join('&')
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchGet?key=${API_KEY}&valueRenderOption=UNFORMATTED_VALUE&${params}`
   const res = await fetch(url)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `HTTP ${res.status} for "${range}"`)
+    throw new Error(err?.error?.message || `HTTP ${res.status} fetching ranges`)
   }
-  return (await res.json()).values || []
+  const json = await res.json()
+  // Returns valueRanges in the same order as the input ranges array
+  return (json.valueRanges || []).map(vr => vr.values || [])
 }
 
 // ─── Investment data transform ─────────────────────────────────────────────────
@@ -1017,17 +1022,17 @@ function useAppData() {
     try {
       const [invRows, cashRows, snapshotRows, txRows,
              bankTxRows, bankSummaryRows, bankBalanceRows, accountBalanceRows,
-             holidayRows, houseRows] = await Promise.all([
-        fetchRange(RANGES.INVESTMENTS),
-        fetchRange(RANGES.CASH),
-        fetchRange(RANGES.SNAPSHOT),
-        fetchRange(RANGES.INV_TX),
-        fetchRange(BANK_TX_RANGE),
-        fetchRange(BANK_SUMMARY_RANGE),
-        fetchRange(BANK_BALANCE_RANGE),
-        fetchRange(ACCOUNT_BALANCE_RANGE),
-        fetchRange(HOLIDAY_RANGE),
-        fetchRange(HOUSE_RANGE),
+             holidayRows, houseRows] = await fetchAllRanges([
+        RANGES.INVESTMENTS,
+        RANGES.CASH,
+        RANGES.SNAPSHOT,
+        RANGES.INV_TX,
+        BANK_TX_RANGE,
+        BANK_SUMMARY_RANGE,
+        BANK_BALANCE_RANGE,
+        ACCOUNT_BALANCE_RANGE,
+        HOLIDAY_RANGE,
+        HOUSE_RANGE,
       ])
       setInvData(transformInvData({ invRows, cashRows, snapshotRows, txRows }))
       setBankData(transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accountBalanceRows }))
