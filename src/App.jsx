@@ -914,38 +914,49 @@ function transformHolidayData({ holidayRows }) {
   const ytdExpenses = rows
     .filter(r => {
       const d = parseDate(r[H.DATE])
-      return d && d.getFullYear() === currentYear && String(r[H.TYPE]) === 'Expense'
+      if (!d || d.getFullYear() !== currentYear) return false
+      return String(r[H.TYPE]) === 'Expense' || (String(r[H.TYPE]) === 'Deposit' && r[H.TRIP])
     })
-    .reduce((s, r) => { const v = toNum(r[H.AMT]) ?? 0; return s + (v < 0 ? Math.abs(v) : 0) }, 0)
+    .reduce((s, r) => {
+      const v = toNum(r[H.AMT]) ?? 0
+      return s + (v < 0 ? Math.abs(v) : -v)
+    }, 0)
 
   // ── Current-year Holiday Year totals (spend + deposits by Holiday Year) ──────
   const currentHolYearSpend = rows
-    .filter(r => Number(r[H.HOL_YEAR]) === currentYear && String(r[H.TYPE]) === 'Expense')
-    .reduce((s, r) => { const v = toNum(r[H.AMT]) ?? 0; return s + (v < 0 ? Math.abs(v) : 0) }, 0)
+    .filter(r => Number(r[H.HOL_YEAR]) === currentYear &&
+      (String(r[H.TYPE]) === 'Expense' || (String(r[H.TYPE]) === 'Deposit' && r[H.TRIP])))
+    .reduce((s, r) => {
+      const v = toNum(r[H.AMT]) ?? 0
+      // Expenses are negative -> abs gives spend. Trip-tagged Deposits are refunds -> subtract.
+      return s + (v < 0 ? Math.abs(v) : -v)
+    }, 0)
 
-  // Current Holiday Year confirmed trips (Holiday Year = currentYear, type = Expense)
+  // Current Holiday Year confirmed trips — net spend per destination
   const currentYearTrips = (() => {
     const map = {}
-    rows.filter(r => Number(r[H.HOL_YEAR]) === currentYear && String(r[H.TYPE]) === 'Expense')
+    rows.filter(r => Number(r[H.HOL_YEAR]) === currentYear &&
+      (String(r[H.TYPE]) === 'Expense' || (String(r[H.TYPE]) === 'Deposit' && r[H.TRIP])))
       .forEach(r => {
         const v = toNum(r[H.AMT]) ?? 0
-        if (v < 0) {
-          const trip = String(r[H.TRIP] || 'Other').trim()
-          map[trip] = (map[trip] || 0) + Math.abs(v)
-        }
+        const trip = String(r[H.TRIP] || 'Other').trim()
+        // Expenses (negative) add to spend; Deposit refunds (positive) reduce it
+        map[trip] = (map[trip] || 0) + (v < 0 ? Math.abs(v) : -v)
       })
-    return Object.entries(map).map(([name, v]) => ({ name, v })).sort((a, b) => b.v - a.v)
+    // Remove any trips that netted to zero or negative (fully refunded)
+    return Object.entries(map)
+      .filter(([, v]) => v > 0)
+      .map(([name, v]) => ({ name, v }))
+      .sort((a, b) => b.v - a.v)
   })()
 
   // ── Annual chart: grouped by Holiday Year, then trip ─────────────────────────
   // All-time trip totals used to determine sort order (highest = bottom of stack)
   const allTripTotals = {}
-  rows.filter(r => String(r[H.TYPE]) === 'Expense').forEach(r => {
+  rows.filter(r => String(r[H.TYPE]) === 'Expense' || (String(r[H.TYPE]) === 'Deposit' && r[H.TRIP])).forEach(r => {
     const v = toNum(r[H.AMT]) ?? 0
-    if (v < 0) {
-      const trip = String(r[H.TRIP] || 'Other').trim()
-      allTripTotals[trip] = (allTripTotals[trip] || 0) + Math.abs(v)
-    }
+    const trip = String(r[H.TRIP] || 'Other').trim()
+    allTripTotals[trip] = (allTripTotals[trip] || 0) + (v < 0 ? Math.abs(v) : -v)
   })
   // Sort descending — first in array = rendered at bottom of stack
   const tripSortOrder = Object.entries(allTripTotals)
@@ -956,13 +967,11 @@ function transformHolidayData({ holidayRows }) {
   const holYears = [...new Set(rows.filter(r => r[H.HOL_YEAR]).map(r => Number(r[H.HOL_YEAR])))].sort()
   const yearTripData = {}
   holYears.forEach(yr => { yearTripData[yr] = {} })
-  rows.filter(r => String(r[H.TYPE]) === 'Expense' && r[H.HOL_YEAR]).forEach(r => {
+  rows.filter(r => (String(r[H.TYPE]) === 'Expense' || (String(r[H.TYPE]) === 'Deposit' && r[H.TRIP])) && r[H.HOL_YEAR]).forEach(r => {
     const v = toNum(r[H.AMT]) ?? 0
-    if (v < 0) {
-      const yr = Number(r[H.HOL_YEAR])
-      const trip = String(r[H.TRIP] || 'Other').trim()
-      yearTripData[yr][trip] = (yearTripData[yr][trip] || 0) + Math.abs(v)
-    }
+    const yr = Number(r[H.HOL_YEAR])
+    const trip = String(r[H.TRIP] || 'Other').trim()
+    yearTripData[yr][trip] = (yearTripData[yr][trip] || 0) + (v < 0 ? Math.abs(v) : -v)
   })
 
   // Year totals for data labels on top of bars
