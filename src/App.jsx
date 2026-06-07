@@ -911,20 +911,23 @@ function transformHolidayData({ holidayRows }) {
       const d = parseDate(r[H.DATE])
       return d && d.getFullYear() === currentYear && String(r[H.TYPE]) === 'Expense'
     })
-    .reduce((s, r) => s + Math.abs(toNum(r[H.AMT]) ?? 0), 0)
+    .reduce((s, r) => { const v = toNum(r[H.AMT]) ?? 0; return s + (v < 0 ? Math.abs(v) : 0) }, 0)
 
   // ── Current-year Holiday Year totals (spend + deposits by Holiday Year) ──────
   const currentHolYearSpend = rows
     .filter(r => Number(r[H.HOL_YEAR]) === currentYear && String(r[H.TYPE]) === 'Expense')
-    .reduce((s, r) => s + Math.abs(toNum(r[H.AMT]) ?? 0), 0)
+    .reduce((s, r) => { const v = toNum(r[H.AMT]) ?? 0; return s + (v < 0 ? Math.abs(v) : 0) }, 0)
 
   // Current Holiday Year confirmed trips (Holiday Year = currentYear, type = Expense)
   const currentYearTrips = (() => {
     const map = {}
     rows.filter(r => Number(r[H.HOL_YEAR]) === currentYear && String(r[H.TYPE]) === 'Expense')
       .forEach(r => {
-        const trip = String(r[H.TRIP] || 'Other').trim()
-        map[trip] = (map[trip] || 0) + Math.abs(toNum(r[H.AMT]) ?? 0)
+        const v = toNum(r[H.AMT]) ?? 0
+        if (v < 0) {
+          const trip = String(r[H.TRIP] || 'Other').trim()
+          map[trip] = (map[trip] || 0) + Math.abs(v)
+        }
       })
     return Object.entries(map).map(([name, v]) => ({ name, v })).sort((a, b) => b.v - a.v)
   })()
@@ -933,8 +936,11 @@ function transformHolidayData({ holidayRows }) {
   // All-time trip totals used to determine sort order (highest = bottom of stack)
   const allTripTotals = {}
   rows.filter(r => String(r[H.TYPE]) === 'Expense').forEach(r => {
-    const trip = String(r[H.TRIP] || 'Other').trim()
-    allTripTotals[trip] = (allTripTotals[trip] || 0) + Math.abs(toNum(r[H.AMT]) ?? 0)
+    const v = toNum(r[H.AMT]) ?? 0
+    if (v < 0) {
+      const trip = String(r[H.TRIP] || 'Other').trim()
+      allTripTotals[trip] = (allTripTotals[trip] || 0) + Math.abs(v)
+    }
   })
   // Sort descending — first in array = rendered at bottom of stack
   const tripSortOrder = Object.entries(allTripTotals)
@@ -946,9 +952,12 @@ function transformHolidayData({ holidayRows }) {
   const yearTripData = {}
   holYears.forEach(yr => { yearTripData[yr] = {} })
   rows.filter(r => String(r[H.TYPE]) === 'Expense' && r[H.HOL_YEAR]).forEach(r => {
-    const yr = Number(r[H.HOL_YEAR])
-    const trip = String(r[H.TRIP] || 'Other').trim()
-    yearTripData[yr][trip] = (yearTripData[yr][trip] || 0) + Math.abs(toNum(r[H.AMT]) ?? 0)
+    const v = toNum(r[H.AMT]) ?? 0
+    if (v < 0) {
+      const yr = Number(r[H.HOL_YEAR])
+      const trip = String(r[H.TRIP] || 'Other').trim()
+      yearTripData[yr][trip] = (yearTripData[yr][trip] || 0) + Math.abs(v)
+    }
   })
 
   // Year totals for data labels on top of bars
