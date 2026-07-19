@@ -364,29 +364,70 @@ function transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accou
   const balRows = bankBalanceRows.slice(1).filter(r => r[0] && r[2])
   const savingsHistory = {}
 
-  // Bryan A006: bars show monthly net flow excluding starting capital ('Others' income lump).
+  // Bryan A006: bucketed by PAY CYCLE (anchored on real A005 Salary transaction
+  // dates), not calendar month. This keeps a deposit and the outflows it funds
+  // in the same bar even when they straddle a calendar-month boundary (e.g. a
+  // Jun 27 payday funding spend that posts in early July).
+  // Bars show net flow excluding starting capital ('Others' income lump).
   // Running balance line includes ALL transactions so it reflects true account value.
+  const a005SalaryTx = allTx
+    .filter(t => t.acct === 'A005' && t.type === 'Income' && t.cat === 'Salary' && t.date)
+    .sort((a, b) => a.date - b.date)
+
+  // Collapse near-duplicate salary entries (e.g. a correction/split payment
+  // posted a day or two apart) into a single anchor, keeping the earliest date.
+  // Genuine paydays are always ~28-31 days apart, so anything closer than this
+  // gap is treated as noise rather than a new cycle.
+  const MIN_CYCLE_GAP_DAYS = 5
+  const paydayAnchors = []
+  a005SalaryTx.forEach(t => {
+    const last = paydayAnchors[paydayAnchors.length - 1]
+    const gapDays = last ? (t.date - last) / (1000 * 60 * 60 * 24) : Infinity
+    if (gapDays >= MIN_CYCLE_GAP_DAYS) paydayAnchors.push(t.date)
+    // else: duplicate/near-duplicate — folded into the existing anchor, ignored
+  })
+
+  function a006CycleIndexFor(date) {
+    if (paydayAnchors.length === 0) return -1
+    let idx = -1
+    for (let i = 0; i < paydayAnchors.length; i++) {
+      if (date >= paydayAnchors[i]) idx = i
+      else break
+    }
+    return idx // -1 = before the first known payday
+  }
+
   const a006Tx = allTx.filter(t => t.acct === 'A006').sort((a, b) => a.date - b.date)
-  const a006MonthMap = {}
+  const a006CycleMap = {}
   a006Tx.forEach(t => {
     if (!t.date) return
-    const yr = t.date.getFullYear()
-    const mo = t.date.getMonth() + 1
-    const key = yr + '-' + String(mo).padStart(2, '0')
-    if (!a006MonthMap[key]) a006MonthMap[key] = { year: yr, month: mo, flow: 0, balanceDelta: 0 }
+    const idx = a006CycleIndexFor(t.date)
+    if (!a006CycleMap[idx]) {
+      const start = idx === -1 ? null : paydayAnchors[idx]
+      const end = idx === -1 ? (paydayAnchors[0] ?? null) : (paydayAnchors[idx + 1] ?? null)
+      a006CycleMap[idx] = { idx, start, end, flow: 0, balanceDelta: 0 }
+    }
     const delta = (t.type === 'Income' ? 1 : -1) * Math.abs(t.amt)
-    a006MonthMap[key].balanceDelta += delta
+    a006CycleMap[idx].balanceDelta += delta
     // Exclude 'Others' income (starting capital one-off) from the flow bar
     if (!(t.type === 'Income' && t.cat === 'Others')) {
-      a006MonthMap[key].flow += delta
+      a006CycleMap[idx].flow += delta
     }
   })
   let a006Running = 0
-  savingsHistory['A006'] = Object.values(a006MonthMap)
-    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
-    .map(m => {
-      a006Running += m.balanceDelta
-      return { label: monthLabel(m.year, m.month), flow: Math.round(m.flow), balance: Math.round(a006Running) }
+  savingsHistory['A006'] = Object.values(a006CycleMap)
+    .sort((a, b) => a.idx - b.idx)
+    .map(c => {
+      a006Running += c.balanceDelta
+      const label = c.start
+        ? c.start.toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }) + ' cycle'
+        : 'Starting'
+      return {
+        label,
+        flow: Math.round(c.flow),
+        balance: Math.round(a006Running),
+        isOpen: c.end === null, // current, still-accumulating cycle — not yet closed by next payday
+      }
     })
 
   // All other savings accounts (A008 Joint): same pattern as A006.
@@ -1581,21 +1622,35 @@ function SavingsChart({ history, color, balanceOnly = false }) {
   const domainMin = Math.floor(minFlow * 1.3 / 1000) * 1000
   const domainMax = Math.ceil(maxVal  * 1.1 / 1000) * 1000
   return (
-    <ResponsiveContainer width="100%" height={140}>
-      <ComposedChart data={history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
-        <YAxis domain={[domainMin, domainMax]} tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false}
-          tickFormatter={fmtTick} />
-        <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: `1px solid ${C.border}` }}
-          formatter={(val, name) => [(val < 0 ? '-' : '') + fmtSGD(Math.abs(val)), name === 'flow' ? 'Net flow' : 'Balance']} />
-        <ReferenceLine y={0} stroke={C.border} strokeWidth={1} />
-        <Bar dataKey="flow" name="flow" radius={[3, 3, 0, 0]}>
-          {history.map((e, i) => <Cell key={i} fill={(e.flow ?? 0) >= 0 ? '#10b981cc' : C.red + 'cc'} />)}
-        </Bar>
-        <Line type="monotone" dataKey="balance" name="balance" stroke={color} strokeWidth={2} dot={{ r: 3, fill: color }} />
-      </ComposedChart>
-    </ResponsiveContainer>
+    <div>
+      <ResponsiveContainer width="100%" height={140}>
+        <ComposedChart data={history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false} />
+          <YAxis domain={[domainMin, domainMax]} tick={{ fontSize: 9, fill: C.muted }} tickLine={false} axisLine={false}
+            tickFormatter={fmtTick} />
+          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: `1px solid ${C.border}` }}
+            formatter={(val, name) => [(val < 0 ? '-' : '') + fmtSGD(Math.abs(val)), name === 'flow' ? 'Net flow' : 'Balance']} />
+          <ReferenceLine y={0} stroke={C.border} strokeWidth={1} />
+          <Bar dataKey="flow" name="flow" radius={[3, 3, 0, 0]}>
+            {history.map((e, i) => {
+              const base = (e.flow ?? 0) >= 0 ? '#10b981' : C.red
+              // Current in-progress pay cycle: lighter fill + dashed outline so it
+              // reads as "still filling up", not a final red/green verdict.
+              return e.isOpen
+                ? <Cell key={i} fill={base + '55'} stroke={base} strokeWidth={1} strokeDasharray="3 3" />
+                : <Cell key={i} fill={base + 'cc'} />
+            })}
+          </Bar>
+          <Line type="monotone" dataKey="balance" name="balance" stroke={color} strokeWidth={2} dot={{ r: 3, fill: color }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+      {history.some(h => h.isOpen) && (
+        <div style={{ fontSize: 9, color: C.muted, textAlign: 'right', marginTop: 2 }}>
+          Lighter bar = current pay cycle, still in progress
+        </div>
+      )}
+    </div>
   )
 }
 
