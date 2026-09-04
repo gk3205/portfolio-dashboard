@@ -11,6 +11,10 @@ import {
   BANK_ACCOUNTS, SAVINGS_ACCOUNTS, CAT_COLORS, HOLIDAY_RANGE, HOUSE_RANGE,
 } from './config'
 
+// ─── Cash-flow source (true external deposits/withdrawals, not trade activity) ─
+const INV_CASH_TX_RANGE = "'Inv_Cash Tx'!A:F"
+const ACCT_OWNER = { A001: 'Bryan', A002: 'Joint', A003: 'Nathan', A004: 'Natalie' }
+
 // ─── Colours ─────────────────────────────────────────────────────────────────
 const C = {
   bg: '#f2f3f5', card: '#ffffff', border: '#e8e9eb',
@@ -85,17 +89,23 @@ function calculateXIRR(cashflows, dates) {
   return isFinite(rate) && rate > -1 ? rate * 100 : null
 }
 
-function computeXIRRByOwner(txRows, holdingsMap) {
+// Money-weighted return per owner, built from TRUE external cash flows
+// (Inv_Cash Tx: deposits/withdrawals only — dividends already excluded at source).
+// Deliberately NOT sourced from Inv_Tx (that's the trade blotter — buys/sells of
+// existing account cash, not new capital — using it double-counts internal trading
+// activity as if it were fresh deposits).
+function computeXIRRByOwner(cashTxRows, holdingsMap) {
   const byOwner = {}
   OWNERS.filter(o => o !== 'All Owners').forEach(o => { byOwner[o] = { cfs: [], dates: [] } })
-  txRows.slice(1).forEach(r => {
-    const owner = String(r[TX_COLS.OWNER] || '').trim()
-    const type = String(r[TX_COLS.TYPE] || '').trim()
-    const amtSGD = toNum(r[TX_COLS.INV_AMOUNT_SGD])
-    const date = parseDate(r[TX_COLS.DATE])
-    if (!owner || !byOwner[owner] || amtSGD === null || !date) return
-    const cf = (type === 'Buy' || type === 'Deposit') ? -Math.abs(amtSGD) : Math.abs(amtSGD)
-    byOwner[owner].cfs.push(cf)
+  cashTxRows.slice(1).forEach(r => {
+    const acct = String(r[1] || '').trim()
+    const owner = ACCT_OWNER[acct]
+    const amt = toNum(r[4])
+    const date = parseDate(r[0])
+    if (!owner || !byOwner[owner] || amt === null || !date) return
+    // Deposit (+amt) → investor outflow (money leaving investor's pocket into the account)
+    // Withdrawal (–amt) → investor inflow. Dividends are already excluded at the sheet level.
+    byOwner[owner].cfs.push(-amt)
     byOwner[owner].dates.push(date)
   })
   const today = new Date()
@@ -109,6 +119,22 @@ function computeXIRRByOwner(txRows, holdingsMap) {
     const xirr = calculateXIRR(combined.map(c => c.cf), combined.map(c => c.date))
     return { owner, xirr, value: portfolioValue }
   }).filter(x => x.value > 0)
+}
+
+// Net external cash flow for one owner between two dates (exclusive start, inclusive end).
+// Used to strip deposit/withdrawal noise out of the monthly return chart so a deposit
+// doesn't masquerade as investment performance.
+function sumCashFlow(cashTxRows, ownerName, fromDateExclusive, toDateInclusive) {
+  let sum = 0
+  cashTxRows.slice(1).forEach(r => {
+    const acct = String(r[1] || '').trim()
+    if (ACCT_OWNER[acct] !== ownerName) return
+    const amt = toNum(r[4])
+    const date = parseDate(r[0])
+    if (amt === null || !date) return
+    if (date > fromDateExclusive && date <= toDateInclusive) sum += amt
+  })
+  return sum
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -151,7 +177,7 @@ async function fetchAllRanges(ranges) {
 }
 
 // ─── Investment data transform ─────────────────────────────────────────────────
-function transformInvData({ invRows, cashRows, snapshotRows, txRows }) {
+function transformInvData({ invRows, cashRows, snapshotRows, cashTxRows }) {
   const holdings = invRows.slice(1).filter(r => r[INV_COLS.TICKER]).map(r => ({
     ticker: String(r[INV_COLS.TICKER] || ''),
     owner: String(r[INV_COLS.OWNER] || ''),
@@ -196,8 +222,12 @@ function transformInvData({ invRows, cashRows, snapshotRows, txRows }) {
       const v = toNum(r[key]) ?? 0
       const p = prev ? (toNum(prev[key]) ?? v) : v
       const f = toNum(first[key]) ?? v
+      const prevDate = prev ? parseDate(prev[SNAP_COLS.DATE]) : date
+      // Strip that period's net deposits/withdrawals out before computing % change,
+      // so a cash injection isn't misread as investment performance.
+      const cfPeriod = prev ? sumCashFlow(cashTxRows, owner, prevDate, date) : 0
       row[`${owner}_value`]   = v
-      row[`${owner}_ret`]     = p > 0 ? +((v / p - 1) * 100).toFixed(2) : 0
+      row[`${owner}_ret`]     = p > 0 ? +(((v - cfPeriod) / p - 1) * 100).toFixed(2) : 0
       row[`${owner}_indexed`] = f > 0 ? +((v / f) * 100).toFixed(2) : 100
       row[`${owner}_gain`]    = v - f
     })
@@ -213,7 +243,7 @@ function transformInvData({ invRows, cashRows, snapshotRows, txRows }) {
 
   const portfolioByOwner = {}
   allHoldings.forEach(h => { portfolioByOwner[h.owner] = (portfolioByOwner[h.owner] || 0) + h.currentValue })
-  const xirr = computeXIRRByOwner(txRows, portfolioByOwner)
+  const xirr = computeXIRRByOwner(cashTxRows, portfolioByOwner)
   return { allHoldings, snapshotData, xirr }
 }
 
@@ -1070,13 +1100,13 @@ function useAppData() {
     }
     setLoading(true); setError(null)
     try {
-      const [invRows, cashRows, snapshotRows, txRows,
+      const [invRows, cashRows, snapshotRows, cashTxRows,
              bankTxRows, bankSummaryRows, bankBalanceRows, accountBalanceRows,
              holidayRows, houseRows] = await fetchAllRanges([
         RANGES.INVESTMENTS,
         RANGES.CASH,
         RANGES.SNAPSHOT,
-        RANGES.INV_TX,
+        INV_CASH_TX_RANGE,
         BANK_TX_RANGE,
         BANK_SUMMARY_RANGE,
         BANK_BALANCE_RANGE,
@@ -1084,7 +1114,7 @@ function useAppData() {
         HOLIDAY_RANGE,
         HOUSE_RANGE,
       ])
-      setInvData(transformInvData({ invRows, cashRows, snapshotRows, txRows }))
+      setInvData(transformInvData({ invRows, cashRows, snapshotRows, cashTxRows }))
       setBankData(transformBankData({ bankTxRows, bankSummaryRows, bankBalanceRows, accountBalanceRows }))
       setHolidayData(transformHolidayData({ holidayRows }))
       setHouseData(transformHouseData({ houseRows }))
