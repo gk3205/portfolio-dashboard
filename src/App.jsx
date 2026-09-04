@@ -94,6 +94,9 @@ function calculateXIRR(cashflows, dates) {
 // Deliberately NOT sourced from Inv_Tx (that's the trade blotter — buys/sells of
 // existing account cash, not new capital — using it double-counts internal trading
 // activity as if it were fresh deposits).
+// Spans the ENTIRE recorded history for the account (no start-date filter) through
+// today's live portfolio value — i.e. a life-of-account figure, not tied to any
+// fixed anchor or calendar year. `xirrSince` exposes the actual start date used.
 function computeXIRRByOwner(cashTxRows, holdingsMap) {
   const byOwner = {}
   OWNERS.filter(o => o !== 'All Owners').forEach(o => { byOwner[o] = { cfs: [], dates: [] } })
@@ -112,12 +115,13 @@ function computeXIRRByOwner(cashTxRows, holdingsMap) {
   return OWNERS.filter(o => o !== 'All Owners').map(owner => {
     const { cfs, dates } = byOwner[owner]
     const portfolioValue = holdingsMap[owner] || 0
-    if (!cfs.length || !portfolioValue) return { owner, xirr: null, value: portfolioValue }
+    if (!cfs.length || !portfolioValue) return { owner, xirr: null, xirrSince: null, value: portfolioValue }
     const combined = cfs.map((cf, i) => ({ cf, date: dates[i] }))
     combined.push({ cf: portfolioValue, date: today })
     combined.sort((a, b) => a.date - b.date)
     const xirr = calculateXIRR(combined.map(c => c.cf), combined.map(c => c.date))
-    return { owner, xirr, value: portfolioValue }
+    const xirrSince = dates.reduce((min, d) => (d < min ? d : min), dates[0])
+    return { owner, xirr, xirrSince, value: portfolioValue }
   }).filter(x => x.value > 0)
 }
 
@@ -135,6 +139,23 @@ function sumCashFlow(cashTxRows, ownerName, fromDateExclusive, toDateInclusive) 
     if (date > fromDateExclusive && date <= toDateInclusive) sum += amt
   })
   return sum
+}
+
+// Time-weighted return per owner, chain-linked from the monthly cash-flow-adjusted
+// returns already computed in snapshotData (row[`${owner}_ret`] — deposits/withdrawals
+// already netted out per period there). Anchored to the Portfolio Snapshot tab's own
+// start date (currently 30-Nov-2025), through the latest snapshot row — the same
+// anchor convention used for column H in the sheet, so this figure is comparable to
+// that one rather than to XIRR's much longer since-inception window.
+function computeTWRByOwner(snapshotData, snapAnchorDate, snapAsOfDate) {
+  return OWNERS.filter(o => o !== 'All Owners').map(owner => {
+    if (!snapshotData.length) return { owner, twr: null, twrSince: null, twrAsOf: null }
+    const factor = snapshotData.reduce((acc, row) => {
+      const r = row[`${owner}_ret`]
+      return acc * (1 + (typeof r === 'number' ? r : 0) / 100)
+    }, 1)
+    return { owner, twr: (factor - 1) * 100, twrSince: snapAnchorDate, twrAsOf: snapAsOfDate }
+  })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -243,7 +264,12 @@ function transformInvData({ invRows, cashRows, snapshotRows, cashTxRows }) {
 
   const portfolioByOwner = {}
   allHoldings.forEach(h => { portfolioByOwner[h.owner] = (portfolioByOwner[h.owner] || 0) + h.currentValue })
-  const xirr = computeXIRRByOwner(cashTxRows, portfolioByOwner)
+  const xirrRows = computeXIRRByOwner(cashTxRows, portfolioByOwner)
+  const snapAnchorDate = snapRawRows.length ? parseDate(snapRawRows[0][SNAP_COLS.DATE]) : null
+  const snapAsOfDate   = snapRawRows.length ? parseDate(snapRawRows[snapRawRows.length - 1][SNAP_COLS.DATE]) : null
+  const twrRows = computeTWRByOwner(snapshotData, snapAnchorDate, snapAsOfDate)
+  const twrByOwner = Object.fromEntries(twrRows.map(t => [t.owner, t]))
+  const xirr = xirrRows.map(x => ({ ...x, ...twrByOwner[x.owner] }))
   return { allHoldings, snapshotData, xirr }
 }
 
@@ -677,10 +703,10 @@ function getMockInvData() {
     ],
     snapshotData,
     xirr: [
-      { owner: 'Bryan',   xirr: 40.4, value: 197062 },
-      { owner: 'Joint',   xirr: 24.1, value: 420245 },
-      { owner: 'Nathan',  xirr: 22.6, value: 107354 },
-      { owner: 'Natalie', xirr: 19.8, value: 99272  },
+      { owner: 'Bryan',   xirr: 40.4, xirrSince: new Date('2021-04-27'), twr: 18.2, twrSince: new Date('2025-11-30'), twrAsOf: new Date('2026-08-31'), value: 197062 },
+      { owner: 'Joint',   xirr: 24.1, xirrSince: new Date('2018-09-03'), twr: 12.6, twrSince: new Date('2025-11-30'), twrAsOf: new Date('2026-08-31'), value: 420245 },
+      { owner: 'Nathan',  xirr: 22.6, xirrSince: new Date('2024-07-07'), twr: 15.9, twrSince: new Date('2025-11-30'), twrAsOf: new Date('2026-08-31'), value: 107354 },
+      { owner: 'Natalie', xirr: 19.8, xirrSince: new Date('2024-07-07'), twr: 14.3, twrSince: new Date('2025-11-30'), twrAsOf: new Date('2026-08-31'), value: 99272  },
     ],
   }
 }
@@ -1290,19 +1316,35 @@ function AllocationBars({ data }) {
     </div>
   )
 }
+const fmtDateShort = d => d ? d.toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: '2-digit' }) : '—'
+
 function XIRRTable({ data, owner }) {
   const rows = owner === 'All Owners' ? data : data.filter(r => r.owner === owner)
   if (!rows.length) return <div style={{ fontSize: 11, color: C.muted }}>No transaction data yet</div>
+  const metricCell = (val, since, asOf) => (
+    <td style={S.td}>
+      <div style={{ fontWeight: 500, color: val === null || val === undefined ? C.muted : val >= 0 ? C.green : C.red }}>
+        {val !== null && val !== undefined ? fmtPct(val, 1) : '—'}
+      </div>
+      <div style={{ fontSize: 9, color: C.hint, marginTop: 1 }}>
+        {since ? `since ${fmtDateShort(since)}${asOf ? ` · as of ${fmtDateShort(asOf)}` : ''}` : ''}
+      </div>
+    </td>
+  )
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead><tr><th style={S.th}>Owner</th><th style={S.th}>XIRR</th><th style={S.th}>Total Value (SGD)</th></tr></thead>
+      <thead><tr>
+        <th style={S.th}>Owner</th>
+        <th style={S.th}>XIRR (money-weighted)</th>
+        <th style={S.th}>TWR (time-weighted)</th>
+        <th style={S.th}>Total Value (SGD)</th>
+      </tr></thead>
       <tbody>
         {rows.map(r => (
           <tr key={r.owner}>
             <td style={S.td}>{r.owner}</td>
-            <td style={{ ...S.td, fontWeight: 500, color: r.xirr === null ? C.muted : r.xirr >= 0 ? C.green : C.red }}>
-              {r.xirr !== null ? fmtPct(r.xirr, 1) : '—'}
-            </td>
+            {metricCell(r.xirr, r.xirrSince, null)}
+            {metricCell(r.twr, r.twrSince, r.twrAsOf)}
             <td style={S.td}>{fmtSGD(r.value)}</td>
           </tr>
         ))}
@@ -1451,10 +1493,10 @@ function InvestmentPage({ data, reload }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 12, marginBottom: 12 }}>
         <div style={S.card}>
-          <div style={S.cardTitle}>XIRR by owner</div>
-          <div style={S.cardSub}>Calculated from Inv_Tx + current portfolio value</div>
+          <div style={S.cardTitle}>Returns by owner</div>
+          <div style={S.cardSub}>XIRR: money-weighted, since account's first deposit. TWR: time-weighted, chain-linked monthly since the snapshot anchor.</div>
           <XIRRTable data={data.xirr} owner={owner} />
-          <Tag>Inv_Tx (calculated)</Tag>
+          <Tag>Inv_Cash Tx + Portfolio_Snapshot (calculated)</Tag>
         </div>
         <div style={S.card}>
           <div style={S.cardTitle}>Holdings detail</div>
