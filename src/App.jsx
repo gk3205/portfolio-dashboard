@@ -229,6 +229,9 @@ function transformInvData({ invRows, cashRows, snapshotRows, cashTxRows }) {
   const snapRawRows = snapshotRows.slice(1).filter(r =>
     r[SNAP_COLS.DATE] && toNum(r[SNAP_COLS.BRYAN_VALUE]) !== null
   )
+  const cumFactor = {}
+  OWNERS.filter(o => o !== 'All Owners').forEach(o => { cumFactor[o] = 1 })
+
   const snapshotData = snapRawRows.map((r, i) => {
     const date  = parseDate(r[SNAP_COLS.DATE])
     const label = date
@@ -247,10 +250,18 @@ function transformInvData({ invRows, cashRows, snapshotRows, cashTxRows }) {
       // Strip that period's net deposits/withdrawals out before computing % change,
       // so a cash injection isn't misread as investment performance.
       const cfPeriod = prev ? sumCashFlow(cashTxRows, owner, prevDate, date) : 0
+      const ret = p > 0 ? (v - cfPeriod) / p - 1 : 0
+      cumFactor[owner] *= (1 + ret)
       row[`${owner}_value`]   = v
-      row[`${owner}_ret`]     = p > 0 ? +(((v - cfPeriod) / p - 1) * 100).toFixed(2) : 0
-      row[`${owner}_indexed`] = f > 0 ? +((v / f) * 100).toFixed(2) : 100
-      row[`${owner}_gain`]    = v - f
+      row[`${owner}_ret`]     = +(ret * 100).toFixed(2)
+      // Chain-linked (TWR) index and $ gain — what the ORIGINAL starting balance would
+      // be worth today under this account's actual investment performance, deposits
+      // excluded. Deliberately NOT v/f or v-f (raw value ratio/delta), because that
+      // counts every deposit as if it were investment gain and makes the S&P500
+      // comparison meaningless — see chat for the Bryan example (160.1/$105k raw vs
+      // 107.8/$13.6k true).
+      row[`${owner}_indexed`] = +(cumFactor[owner] * 100).toFixed(2)
+      row[`${owner}_gain`]    = f * (cumFactor[owner] - 1)
     })
 
     const sp   = toNum(r[SNAP_COLS.SP500_CLOSE])
@@ -1295,7 +1306,7 @@ function GrowthChart({ data, owner }) {
           : <LegendLine color={oc} label={owner} />
         }
         {mode === 'indexed' && <LegendLine color="#f87171" label="S&P500" dashed />}
-        {mode === 'gain' && <span style={{ fontSize: 10, color: C.hint }}>S$ gain from first snapshot</span>}
+        {mode === 'gain' && <span style={{ fontSize: 10, color: C.hint }}>S$ investment gain on starting balance — deposits excluded</span>}
       </div>
     </div>
   )
@@ -1480,7 +1491,7 @@ function InvestmentPage({ data, reload }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 12, marginBottom: 12 }}>
         <div style={S.card}>
           <div style={S.cardTitle}>Portfolio growth vs benchmark (indexed to 100)</div>
-          <div style={S.cardSub}>{owner === 'All Owners' ? 'All owners — indexed to 100' : `${owner} vs S&P500`} · Toggle for S$ gain</div>
+          <div style={S.cardSub}>{owner === 'All Owners' ? 'All owners — indexed to 100' : `${owner} vs S&P500`} · deposits/withdrawals excluded · Toggle for S$ gain</div>
           <GrowthChart data={data.snapshotData} owner={owner} />
           <Tag>Portfolio_Snapshot</Tag>
         </div>
